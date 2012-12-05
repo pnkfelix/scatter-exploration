@@ -31,16 +31,10 @@ int ParseArgs::max_nthreads = 100;
 int ParseArgs::max_rep = 10;
 int ParseArgs::max_program = 10;
 
-pthread_mutex_t cout_mutex;
-
-class WorkerContext
+class PrintingHelpers
 {
-public:
-    int threadid;
-    WorkerContext(int i) : threadid(i) { }
-private:
-    void cout_acq() { pthread_mutex_lock(&cout_mutex); }
-    void cout_rel() { pthread_mutex_unlock(&cout_mutex); }
+    virtual void prior_printing() = 0;
+    virtual void after_printing() = 0;
 public:
     template<typename T> void println(T arg) { println(arg, ""); }
 
@@ -69,14 +63,14 @@ public:
 
     template<class T, class U, class V, class W, class X, class Y, class Z>
     void println(T a1, U a2, V a3, W a4, X a5, Y a6, Z a7) {
-        cout_acq();
+        prior_printing();
         cout << a1 << a2 << a3 << a4 << a5 << a6 << a7 << endl;
-        cout_rel();
+        after_printing();
     }
 
-    void start_println() { cout_acq(); }
+    void start_println() { prior_printing(); }
     template<class T>
-    void start_println(T a1) { cout_acq(); cout << a1; }
+    void start_println(T a1) { prior_printing(); cout << a1; }
     template<class T>
     void inter_println(T a1) { cout << a1; }
 
@@ -102,13 +96,33 @@ public:
     template<class T, class U, class V, class W, class X, class Y, class Z>
     void finis_println(T a1, U a2, V a3, W a4, X a5, Y a6, Z a7) {
         cout << a1 << a2 << a3 << a4 << a5 << a6 << a7 << endl;
-        cout_rel();
+        after_printing();
     }
-
-public:
-    WorkerContext() : threadid(-1) { }
 };
 
+class WorkerContext : public PrintingHelpers
+{
+    static pthread_mutex_t cout_mutex;
+public:
+    static void init() { pthread_mutex_init(&cout_mutex, NULL); }
+
+public:
+    WorkerContext(int a) : threadid_( a) { }
+    WorkerContext()      : threadid_(-1) { }
+
+private:
+    int threadid_;
+public:
+    int threadid() { return threadid_; }
+private:
+    virtual void prior_printing() { cout_acq(); }
+    virtual void after_printing() { cout_rel(); }
+
+    void cout_acq() { pthread_mutex_lock(&cout_mutex); }
+    void cout_rel() { pthread_mutex_unlock(&cout_mutex); }
+};
+
+pthread_mutex_t WorkerContext::cout_mutex;
 
 long long fib(int x)
 {
@@ -126,7 +140,7 @@ void *Worker_1_IterFib(void *data)
 {
     int tid;
     WorkerContext *w = (WorkerContext*)data;
-    tid = (intptr_t)w->threadid;
+    tid = (intptr_t)w->threadid();
     w->println("Hello World!  Thread ID: ", tid);
 
     for (int i=0; i < 10; i++) {
@@ -163,10 +177,8 @@ void *Worker_1_IterFib(void *data)
 void *Worker_1_Hello(void *data)
 {
     WorkerContext *w = (WorkerContext*)data;
-    intptr_t i = (intptr_t)w->threadid;
-    pthread_mutex_lock(&cout_mutex);
-    cout << "Hello World " << i << endl;
-    pthread_mutex_unlock(&cout_mutex);
+    intptr_t i = (intptr_t)w->threadid();
+    w->println("Hello World ", i);
     pthread_exit(NULL);
 }
 
@@ -183,17 +195,14 @@ int main(int argc, const char **argv)
 
     args.print_values();
 
-    pthread_mutex_init(&cout_mutex, NULL);
-
+    WorkerContext::init();
     pthread_t threads[args.num_threads];
     WorkerContext *contexts = new WorkerContext[args.num_threads];
     for (int i=0; i < args.num_threads; i++) {
-        pthread_mutex_lock(&cout_mutex);
-        cout << "main() : creating thread, " << i << endl;
-        pthread_mutex_unlock(&cout_mutex);
         contexts[i] = WorkerContext(i);
+        contexts[i].println("main() : creating thread, ", i);
 
-        int rc = pthread_create(&threads[i], NULL, Worker_1_IterFib, (void*)&contexts[i]);
+        int rc = pthread_create(&threads[i], NULL, Worker_1_Hello, (void*)&contexts[i]);
         if (rc) {
             cout << "Error: unable to create thread," << rc << endl;
             exit(3);
