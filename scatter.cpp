@@ -105,13 +105,29 @@ class WorkerContext : public PrintingHelpers
     static pthread_mutex_t cout_mutex;
 public:
     static void init() { pthread_mutex_init(&cout_mutex, NULL); }
+    static void wait_and_exit() { pthread_exit(NULL); }
+private:
+    static void *Run_Worker(void *data) {
+        WorkerContext *w = (WorkerContext*)data;
+        w->run();
+        pthread_exit(NULL);
+    }
 
 public:
     WorkerContext(int a) : threadid_( a) { }
-    WorkerContext()      : threadid_(-1) { }
-
+public:
+    virtual void run() { }
+    void spawn() {
+        int rc = pthread_create(&thread, NULL, Run_Worker, (void*)this);
+        if (rc) {
+            cout << "Error: unable to create thread," << rc << endl;
+            exit(3);
+        }
+    }
 private:
     int threadid_;
+private:
+    pthread_t thread;
 public:
     int threadid() { return threadid_; }
 private:
@@ -123,6 +139,18 @@ private:
 };
 
 pthread_mutex_t WorkerContext::cout_mutex;
+
+void *Worker_1_Hello(void *data);
+class HelloWorker : public WorkerContext {
+    void run() { Worker_1_Hello(this); }
+public: HelloWorker(int i) : WorkerContext(i) { }
+};
+
+void *Worker_1_IterFib(void *data);
+class IterFibWorker : public WorkerContext {
+    void run() { Worker_1_IterFib(this); }
+public: IterFibWorker(int i) : WorkerContext(i) { }
+};
 
 long long fib(int x)
 {
@@ -196,21 +224,16 @@ int main(int argc, const char **argv)
     args.print_values();
 
     WorkerContext::init();
-    pthread_t threads[args.num_threads];
-    WorkerContext *contexts = new WorkerContext[args.num_threads];
+    WorkerContext **contexts = new WorkerContext*[args.num_threads];
     for (int i=0; i < args.num_threads; i++) {
-        contexts[i] = WorkerContext(i);
-        contexts[i].println("main() : creating thread, ", i);
-
-        int rc = pthread_create(&threads[i], NULL, Worker_1_Hello, (void*)&contexts[i]);
-        if (rc) {
-            cout << "Error: unable to create thread," << rc << endl;
-            exit(3);
-        }
+        contexts[i] = new HelloWorker(i);
+    }
+    for (int i=0; i < args.num_threads; i++) {
+        contexts[i]->println("main() : creating thread, ", i);
+        contexts[i]->spawn();
     }
 
-    pthread_exit(NULL);
-    // return 0;
+    WorkerContext::wait_and_exit();
 }
 
 void ParseArgs::print_values()
