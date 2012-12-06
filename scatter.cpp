@@ -177,7 +177,6 @@ int main(int argc, const char **argv)
     if (args.parse_all(argc, argv)) {
         return 2;
     }
-
     args.print_values();
 
     WorkerContext::init();
@@ -218,8 +217,7 @@ long long fib(int x)
 
 void Worker_2_IterFib(IterFibWorker *w)
 {
-    int tid;
-    tid = (intptr_t)w->threadid();
+    int tid = w->threadid();
     w->println("Hello World!  Thread ID: ", tid);
 
     for (int i=0; i < 10; i++) {
@@ -255,8 +253,7 @@ void Worker_2_IterFib(IterFibWorker *w)
 
 void Worker_1_Hello(HelloWorker *w)
 {
-    intptr_t i = (intptr_t)w->threadid();
-    w->println("Hello World ", i);
+    w->println("Hello World ", w->threadid());
     pthread_exit(NULL);
 }
 
