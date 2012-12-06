@@ -152,6 +152,32 @@ class IterFibWorker : public WorkerContext {
 public: IterFibWorker(int i) : WorkerContext(i) { }
 };
 
+int main(int argc, const char **argv)
+{
+    string s;
+    stringstream out;
+
+    ParseArgs args;
+
+    if (args.parse_all(argc, argv)) {
+        return 2;
+    }
+
+    args.print_values();
+
+    WorkerContext::init();
+    WorkerContext **contexts = new WorkerContext*[args.num_threads];
+    for (int i=0; i < args.num_threads; i++) {
+        contexts[i] = new HelloWorker(i);
+    }
+    for (int i=0; i < args.num_threads; i++) {
+        contexts[i]->println("main() : creating thread, ", i);
+        contexts[i]->spawn();
+    }
+
+    WorkerContext::wait_and_exit();
+}
+
 long long fib(int x)
 {
     long long i = 0, a = 0, b = 1, t;
@@ -208,32 +234,6 @@ void *Worker_1_Hello(void *data)
     intptr_t i = (intptr_t)w->threadid();
     w->println("Hello World ", i);
     pthread_exit(NULL);
-}
-
-int main(int argc, const char **argv)
-{
-    string s;
-    stringstream out;
-
-    ParseArgs args;
-
-    if (args.parse_all(argc, argv)) {
-        return 2;
-    }
-
-    args.print_values();
-
-    WorkerContext::init();
-    WorkerContext **contexts = new WorkerContext*[args.num_threads];
-    for (int i=0; i < args.num_threads; i++) {
-        contexts[i] = new HelloWorker(i);
-    }
-    for (int i=0; i < args.num_threads; i++) {
-        contexts[i]->println("main() : creating thread, ", i);
-        contexts[i]->spawn();
-    }
-
-    WorkerContext::wait_and_exit();
 }
 
 void ParseArgs::print_values()
