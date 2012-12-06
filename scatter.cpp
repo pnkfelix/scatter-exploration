@@ -165,6 +165,10 @@ private:
     // callback after workers created but before any are spawned.
     // No specific computation specified (no-op is fine).
     virtual void onStart() = 0;
+
+    // checksum to describe result output of computation.
+    virtual intptr_t resultSummary() = 0;
+
 public:
     void wait_and_exit() {
         for (int i=0; i < num_threads; i++) {
@@ -224,6 +228,7 @@ public:
     HelloBuilder(int num_threads) : WorkerBuilder(num_threads) { }
     void onExit() { println("Hello World done"); }
     void onStart() { println("Hello World start"); }
+    intptr_t resultSummary() { return 0; }
 };
 
 class IterFibWorker;
@@ -237,6 +242,7 @@ public:
     IterFibBuilder(int num_threads) : WorkerBuilder(num_threads) { }
     void onExit() { println("Iterated Fibonacci done"); }
     void onStart() { println("Iterated Fibonacci start"); }
+    intptr_t resultSummary() { return 0; }
 };
 
 class MarsagliaRNG
@@ -303,7 +309,6 @@ private:
 };
 
 class SeqHistogramBuilder;
-class HistogramBuilder;
 class SeqHistogramWorker : public WorkerContext {
     void run();
     friend class SeqHistogramBuilder;
@@ -320,6 +325,7 @@ public:
         , HistogramBuilder(input_len, domain_size) { }
     void onStart();
     void onExit();
+    intptr_t resultSummary();
 };
 
 // FINIS CLASS AND DATA DEFINITIONS
@@ -405,7 +411,23 @@ void SeqHistogramBuilder::onExit()
         }
     }
     println("total: ", tot);
+
+    stringstream ss;
+    ss << std::hex << resultSummary();
+    println("summary: 0x", ss.str());
 }
+intptr_t SeqHistogramBuilder::resultSummary() {
+    HistogramBuilder *sb = this;
+    intptr_t l = sb->domain_length();
+    uintptr_t *d = sb->output_data();
+    intptr_t accum = 0;
+    for (int i=0; i < l; i++) {
+        accum <<= 1;
+        accum ^= intptr_t(d[i]);
+    }
+    return accum;
+}
+
 long long fib(int x)
 {
     long long i = 0, a = 0, b = 1, t;
