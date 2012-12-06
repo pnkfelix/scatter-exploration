@@ -7,6 +7,10 @@
 
 using namespace std;
 
+// FINIS HEADER INCLUDES
+
+// START CLASS AND DATA DEFINITIONS
+
 class ParseArgs {
 public:
     static int max_nthreads;
@@ -106,8 +110,9 @@ class WorkerContext : public PrintingHelpers
 public:
     static void init() { pthread_mutex_init(&cout_mutex, NULL); }
     static void die(int i) { exit(i); }
-    static void wait_and_exit() { pthread_exit(NULL); }
 private:
+    friend class WorkerBuilder;
+    static void wait_and_exit() { pthread_exit(NULL); }
     static void *Run_Worker(void *data) {
         WorkerContext *w = (WorkerContext*)data;
         w->run();
@@ -141,8 +146,38 @@ private:
 
 class WorkerBuilder
 {
-public:
+private:
     virtual WorkerContext *newWorker(int i) = 0;
+public:
+    virtual void wait_and_exit() { WorkerContext::wait_and_exit(); }
+
+public:
+    WorkerBuilder(int num_threads_) : num_threads(num_threads_) {
+        contexts = new WorkerContext*[num_threads];
+        for (int i=0; i < num_threads; i++) {
+            contexts[i] = NULL;
+        }
+    }
+    void createWorkers() {
+        for (int i=0; i < num_threads; i++) {
+            contexts[i] = newWorker(i);
+        }
+    }
+    void spawnWorkers() {
+        for (int i=0; i < num_threads; i++) {
+            contexts[i]->println("main() : creating thread, ", i);
+            contexts[i]->spawn();
+        }
+    }
+    virtual ~WorkerBuilder() {
+        for (int i=0; i < num_threads; i++) {
+            contexts[i] = NULL;
+        }
+        delete[] contexts;
+    }
+private:
+    int num_threads;
+    WorkerContext **contexts;
 };
 
 pthread_mutex_t WorkerContext::cout_mutex;
@@ -155,6 +190,8 @@ public: HelloWorker(int i) : WorkerContext(i) { }
 };
 class HelloBuilder : public WorkerBuilder {
     WorkerContext *newWorker(int i) { return new HelloWorker(i); }
+public:
+    HelloBuilder(int num_threads) : WorkerBuilder(num_threads) { }
 };
 
 class IterFibWorker;
@@ -165,7 +202,26 @@ public: IterFibWorker(int i) : WorkerContext(i) { }
 };
 class IterFibBuilder : public WorkerBuilder {
     WorkerContext *newWorker(int i) { return new IterFibWorker(i); }
+public:
+    IterFibBuilder(int num_threads) : WorkerBuilder(num_threads) { }
 };
+
+class HistogramBuilder;
+class HistogramWorker : public WorkerContext {
+    void run();
+    friend class HistogramBuilder;
+    HistogramWorker(HistogramBuilder *builder_, int i)
+        : WorkerContext(i), commonBuilder(builder_) { }
+private:
+    HistogramBuilder *commonBuilder;
+};
+class HistogramBuilder : public WorkerBuilder {
+    WorkerContext *newWorker(int i) { return new HistogramWorker(this, i); }
+public:
+    HistogramBuilder(int num_threads) : WorkerBuilder(num_threads) { }
+};
+
+// FINIS CLASS AND DATA DEFINITIONS
 
 int main(int argc, const char **argv)
 {
@@ -184,23 +240,26 @@ int main(int argc, const char **argv)
     // set up workers
     WorkerContext **contexts = new WorkerContext*[args.num_threads];
     WorkerBuilder *builder;
+    int nt = args.num_threads;
     switch (args.program) {
-    case 1: builder = new HelloBuilder(); break;
-    case 2: builder = new IterFibBuilder(); break;
+    case 1: builder = new HelloBuilder(nt); break;
+    case 2: builder = new IterFibBuilder(nt); break;
+    case 3: builder = new HistogramBuilder(nt); break;
     default: out << "unmatched program number: " << args.program << endl;
         WorkerContext::die(3);
     }
-    for (int i=0; i < args.num_threads; i++) {
-        contexts[i] = builder->newWorker(i);
-    }
+    builder->createWorkers();
+    //for (int i=0; i < args.num_threads; i++) { contexts[i] = builder->newWorker(i); }
 
     // all workers constructed; spawn each in its own thread.
-    for (int i=0; i < args.num_threads; i++) {
-        contexts[i]->println("main() : creating thread, ", i);
-        contexts[i]->spawn();
-    }
+    builder->spawnWorkers();
 
-    WorkerContext::wait_and_exit();
+    builder->wait_and_exit();
+}
+
+void HistogramWorker::run()
+{
+    
 }
 
 long long fib(int x)
