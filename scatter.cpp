@@ -105,6 +105,7 @@ class WorkerContext : public PrintingHelpers
     static pthread_mutex_t cout_mutex;
 public:
     static void init() { pthread_mutex_init(&cout_mutex, NULL); }
+    static void die(int i) { exit(i); }
     static void wait_and_exit() { pthread_exit(NULL); }
 private:
     static void *Run_Worker(void *data) {
@@ -138,6 +139,12 @@ private:
     void cout_rel() { pthread_mutex_unlock(&cout_mutex); }
 };
 
+class WorkerBuilder
+{
+public:
+    virtual WorkerContext *newWorker(int i) = 0;
+};
+
 pthread_mutex_t WorkerContext::cout_mutex;
 
 void *Worker_1_Hello(void *data);
@@ -145,11 +152,17 @@ class HelloWorker : public WorkerContext {
     void run() { Worker_1_Hello(this); }
 public: HelloWorker(int i) : WorkerContext(i) { }
 };
+class HelloBuilder : public WorkerBuilder {
+    WorkerContext *newWorker(int i) { return new HelloWorker(i); }
+};
 
 void *Worker_1_IterFib(void *data);
 class IterFibWorker : public WorkerContext {
     void run() { Worker_1_IterFib(this); }
 public: IterFibWorker(int i) : WorkerContext(i) { }
+};
+class IterFibBuilder : public WorkerBuilder {
+    WorkerContext *newWorker(int i) { return new IterFibWorker(i); }
 };
 
 int main(int argc, const char **argv)
@@ -166,10 +179,21 @@ int main(int argc, const char **argv)
     args.print_values();
 
     WorkerContext::init();
+
+    // set up workers
     WorkerContext **contexts = new WorkerContext*[args.num_threads];
-    for (int i=0; i < args.num_threads; i++) {
-        contexts[i] = new HelloWorker(i);
+    WorkerBuilder *builder;
+    switch (args.program) {
+    case 1: builder = new HelloBuilder(); break;
+    case 2: builder = new IterFibBuilder(); break;
+    default: out << "unmatched program number: " << args.program << endl;
+        WorkerContext::die(3);
     }
+    for (int i=0; i < args.num_threads; i++) {
+        contexts[i] = builder->newWorker(i);
+    }
+
+    // all workers constructed; spawn each in its own thread.
     for (int i=0; i < args.num_threads; i++) {
         contexts[i]->println("main() : creating thread, ", i);
         contexts[i]->spawn();
