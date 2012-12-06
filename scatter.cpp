@@ -147,7 +147,8 @@ public:
 
 pthread_mutex_t WorkerContext::cout_mutex;
 
-void *Worker_1_Hello(void *data);
+class HelloWorker;
+void Worker_1_Hello(HelloWorker *data);
 class HelloWorker : public WorkerContext {
     void run() { Worker_1_Hello(this); }
 public: HelloWorker(int i) : WorkerContext(i) { }
@@ -156,7 +157,8 @@ class HelloBuilder : public WorkerBuilder {
     WorkerContext *newWorker(int i) { return new HelloWorker(i); }
 };
 
-void *Worker_2_IterFib(void *data);
+class IterFibWorker;
+void Worker_2_IterFib(IterFibWorker *data);
 class IterFibWorker : public WorkerContext {
     void run() { Worker_2_IterFib(this); }
 public: IterFibWorker(int i) : WorkerContext(i) { }
@@ -214,10 +216,9 @@ long long fib(int x)
     return a;
 }
 
-void *Worker_2_IterFib(void *data)
+void Worker_2_IterFib(IterFibWorker *w)
 {
     int tid;
-    WorkerContext *w = (WorkerContext*)data;
     tid = (intptr_t)w->threadid();
     w->println("Hello World!  Thread ID: ", tid);
 
@@ -252,9 +253,8 @@ void *Worker_2_IterFib(void *data)
     pthread_exit(NULL);
 }
 
-void *Worker_1_Hello(void *data)
+void Worker_1_Hello(HelloWorker *w)
 {
-    WorkerContext *w = (WorkerContext*)data;
     intptr_t i = (intptr_t)w->threadid();
     w->println("Hello World ", i);
     pthread_exit(NULL);
