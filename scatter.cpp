@@ -124,7 +124,7 @@ public:
 private:
     friend class WorkerBuilder;
     static void wait_and_exit() { pthread_exit(NULL); }
-    static void *Run_Worker(void *data) {
+    static void *run_worker(void *data) {
         WorkerContext *w = (WorkerContext*)data;
         w->run();
         pthread_exit(NULL);
@@ -135,7 +135,7 @@ public:
 public:
     virtual void run() { }
     void spawn() {
-        int rc = pthread_create(&thread, NULL, Run_Worker, (void*)this);
+        int rc = pthread_create(&thread, NULL, run_worker, (void*)this);
         if (rc) {
             cout << "Error: unable to create thread," << rc << endl;
             exit(3);
@@ -158,6 +158,10 @@ class WorkerBuilder : protected LockingPrintingHelper
 {
 private:
     virtual WorkerContext *newWorker(int i) = 0;
+
+    // callback for when all workers have finished.
+    // No specific computation specified (no-op is fine).
+    virtual void onExit() = 0;
 public:
     void wait_and_exit() {
         for (int i=0; i < num_threads; i++) {
@@ -167,9 +171,6 @@ public:
         onExit();
         WorkerContext::wait_and_exit();
     }
-private:
-    virtual void onExit() { }
-
 public:
     WorkerBuilder(int num_threads_) : num_threads(num_threads_) {
         contexts = new WorkerContext*[num_threads];
@@ -202,9 +203,8 @@ private:
 pthread_mutex_t LockingPrintingHelper::cout_mutex;
 
 class HelloWorker;
-void Worker_1_Hello(HelloWorker *data);
 class HelloWorker : public WorkerContext {
-    void run(); // { Worker_1_Hello(this); }
+    void run();
 public: HelloWorker(int i) : WorkerContext(i) { }
 };
 class HelloBuilder : public WorkerBuilder {
@@ -215,15 +215,15 @@ public:
 };
 
 class IterFibWorker;
-void Worker_2_IterFib(IterFibWorker *data);
 class IterFibWorker : public WorkerContext {
-    void run(); // { Worker_2_IterFib(this); }
+    void run();
 public: IterFibWorker(int i) : WorkerContext(i) { }
 };
 class IterFibBuilder : public WorkerBuilder {
     WorkerContext *newWorker(int i) { return new IterFibWorker(i); }
 public:
     IterFibBuilder(int num_threads) : WorkerBuilder(num_threads) { }
+    void onExit() { println("Iterated Fibonacci done"); }
 };
 
 class HistogramBuilder;
@@ -239,6 +239,7 @@ class HistogramBuilder : public WorkerBuilder {
     WorkerContext *newWorker(int i) { return new HistogramWorker(this, i); }
 public:
     HistogramBuilder(int num_threads) : WorkerBuilder(num_threads) { }
+    void onExit();
 };
 
 // FINIS CLASS AND DATA DEFINITIONS
@@ -280,6 +281,10 @@ void HistogramWorker::run()
     
 }
 
+void HistogramBuilder::onExit()
+{
+    println("Histogram done");
+}
 long long fib(int x)
 {
     long long i = 0, a = 0, b = 1, t;
@@ -330,7 +335,6 @@ void IterFibWorker::run()
 }
 
 void HelloWorker::run()
-//void Worker_1_Hello(HelloWorker *w)
 {
     println("Hello World ", threadid());
     pthread_exit(NULL);
