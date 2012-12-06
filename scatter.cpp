@@ -226,19 +226,19 @@ public:
     void onExit() { println("Iterated Fibonacci done"); }
 };
 
-class HistogramBuilder;
-class HistogramWorker : public WorkerContext {
+class SeqHistogramBuilder;
+class SeqHistogramWorker : public WorkerContext {
     void run();
-    friend class HistogramBuilder;
-    HistogramWorker(HistogramBuilder *builder_, int i)
+    friend class SeqHistogramBuilder;
+    SeqHistogramWorker(SeqHistogramBuilder *builder_, int i)
         : WorkerContext(i), commonBuilder(builder_) { }
 private:
-    HistogramBuilder *commonBuilder;
+    SeqHistogramBuilder *commonBuilder;
 };
-class HistogramBuilder : public WorkerBuilder {
-    WorkerContext *newWorker(int i) { return new HistogramWorker(this, i); }
+class SeqHistogramBuilder : public WorkerBuilder {
+    WorkerContext *newWorker(int i) { return new SeqHistogramWorker(this, i); }
 public:
-    HistogramBuilder(int num_threads) : WorkerBuilder(num_threads) { }
+    SeqHistogramBuilder(int num_threads) : WorkerBuilder(num_threads) { }
     void onExit();
 };
 
@@ -264,7 +264,7 @@ int main(int argc, const char **argv)
     switch (args.program) {
     case 1: builder = new HelloBuilder(nt); break;
     case 2: builder = new IterFibBuilder(nt); break;
-    case 3: builder = new HistogramBuilder(nt); break;
+    case 3: builder = new SeqHistogramBuilder(nt); break;
     default: out << "unmatched program number: " << args.program << endl;
         WorkerContext::die(3);
     }
@@ -276,12 +276,12 @@ int main(int argc, const char **argv)
     builder->wait_and_exit();
 }
 
-void HistogramWorker::run()
+void SeqHistogramWorker::run()
 {
     
 }
 
-void HistogramBuilder::onExit()
+void SeqHistogramBuilder::onExit()
 {
     println("Histogram done");
 }
