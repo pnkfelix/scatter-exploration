@@ -162,6 +162,9 @@ private:
     // callback for when all workers have finished.
     // No specific computation specified (no-op is fine).
     virtual void onExit() = 0;
+    // callback after workers created but before any are spawned.
+    // No specific computation specified (no-op is fine).
+    virtual void onStart() = 0;
 public:
     void wait_and_exit() {
         for (int i=0; i < num_threads; i++) {
@@ -178,6 +181,13 @@ public:
             contexts[i] = NULL;
         }
     }
+    void start_computation() {
+        onStart();
+        createWorkers();
+        // all workers constructed; spawn each in its own thread.
+        spawnWorkers();
+    }
+private:
     void createWorkers() {
         for (int i=0; i < num_threads; i++) {
             contexts[i] = newWorker(i);
@@ -189,6 +199,7 @@ public:
             contexts[i]->spawn();
         }
     }
+public:
     virtual ~WorkerBuilder() {
         for (int i=0; i < num_threads; i++) {
             contexts[i] = NULL;
@@ -212,6 +223,7 @@ class HelloBuilder : public WorkerBuilder {
 public:
     HelloBuilder(int num_threads) : WorkerBuilder(num_threads) { }
     void onExit() { println("Hello World done"); }
+    void onStart() { println("Hello World start"); }
 };
 
 class IterFibWorker;
@@ -224,21 +236,89 @@ class IterFibBuilder : public WorkerBuilder {
 public:
     IterFibBuilder(int num_threads) : WorkerBuilder(num_threads) { }
     void onExit() { println("Iterated Fibonacci done"); }
+    void onStart() { println("Iterated Fibonacci start"); }
+};
+
+class MarsagliaRNG
+{
+public:
+    uint32_t getUint32() {
+        z = 36969 * (z & 65535) + (z >> 16);
+        u = 18000 * (u & 65535) + (u >> 16);
+        return (z << 16) + u;
+    }
+    uint64_t getUint64() {
+        uint64_t h = getUint32();
+        uint64_t l = getUint32();
+        return (h << 32) + l;
+    }
+    int32_t getInt32() { return (int32_t)getUint32(); }
+    int64_t getInt64() { return (int64_t)getUint64(); }
+    uint32_t get(uint32_t max_value) {
+        uint32_t u = getUint32();
+        // 0 <= u < 2^32
+
+        // The magic value below is 1/(2^32 + 1), to ensure
+        // the result R obeys 0 <= R < 1.
+        return uint32_t(double(max_value) *
+                        (double(u) * 2.3283064359965952e-10));
+    }
+
+    void reseed(uint32_t u, uint32_t z) { this->u = u; this->z = z; }
+public:
+    MarsagliaRNG() : u(1), z(1) { }
+    MarsagliaRNG(uint32_t u_, uint32_t z_) : u(u_), z(z_) { }
+private:
+    uint32_t u;
+    uint32_t z;
+};
+
+class HistogramBuilder : private MarsagliaRNG
+{
+public:
+    intptr_t input_length() { return input_len; }
+    uint32_t* input_data() { return input; }
+    intptr_t domain_length() { return domain_len; }
+    uintptr_t* output_data() { return output; }
+    HistogramBuilder(intptr_t input_length, int32_t domain_length)
+        : input_len(input_length), domain_len(domain_length) {
+        input = new uint32_t[input_len];
+        output = new uintptr_t[domain_len];
+        for (intptr_t i = 0; i < input_len; i++) {
+            input[i] = get(domain_length);
+        }
+        for (intptr_t i = 0; i < domain_len; i++) {
+            output[i] = -1;
+        }
+    }
+    virtual ~HistogramBuilder() {
+        delete[] input;
+        delete[] output;
+    }
+private:
+    intptr_t input_len;
+    uint32_t* input;
+    intptr_t domain_len;
+    uintptr_t *output;
 };
 
 class SeqHistogramBuilder;
+class HistogramBuilder;
 class SeqHistogramWorker : public WorkerContext {
     void run();
     friend class SeqHistogramBuilder;
-    SeqHistogramWorker(SeqHistogramBuilder *builder_, int i)
+    SeqHistogramWorker(HistogramBuilder *builder_, int i)
         : WorkerContext(i), commonBuilder(builder_) { }
-private:
-    SeqHistogramBuilder *commonBuilder;
+protected:
+    HistogramBuilder *commonBuilder;
 };
-class SeqHistogramBuilder : public WorkerBuilder {
+class SeqHistogramBuilder : public WorkerBuilder, public HistogramBuilder {
     WorkerContext *newWorker(int i) { return new SeqHistogramWorker(this, i); }
 public:
-    SeqHistogramBuilder(int num_threads) : WorkerBuilder(num_threads) { }
+    SeqHistogramBuilder(int num_threads, int input_len, int domain_size)
+        : WorkerBuilder(num_threads)
+        , HistogramBuilder(input_len, domain_size) { }
+    void onStart();
     void onExit();
 };
 
@@ -264,26 +344,67 @@ int main(int argc, const char **argv)
     switch (args.program) {
     case 1: builder = new HelloBuilder(nt); break;
     case 2: builder = new IterFibBuilder(nt); break;
-    case 3: builder = new SeqHistogramBuilder(nt); break;
+    case 3: builder = new SeqHistogramBuilder(nt, 20, 10); break;
     default: out << "unmatched program number: " << args.program << endl;
         WorkerContext::die(3);
     }
-    builder->createWorkers();
 
-    // all workers constructed; spawn each in its own thread.
-    builder->spawnWorkers();
-
+    builder->start_computation();
     builder->wait_and_exit();
 }
 
 void SeqHistogramWorker::run()
 {
-    
+    HistogramBuilder *sb = commonBuilder;
+    if (threadid() == 1) {
+        intptr_t l = sb->input_length();
+        uint32_t *d = sb->input_data();
+        intptr_t m = sb->domain_length();
+        uintptr_t *o = sb->output_data();
+        for (int i = 0; i < m; i++) {
+            o[i] = 0;
+        }
+        for (int i = 0; i < l; i++) {
+            uint32_t x = d[i];
+            if (x >= m) { println("whoops", x); exit(99); }
+            o[x] += 1;
+        }
+    } else {
+        // no-op
+    }
 }
 
+void SeqHistogramBuilder::onStart()
+{
+    HistogramBuilder *sb = this;
+    intptr_t l = sb->input_length();
+    uint32_t *d = sb->input_data();
+
+    println("Histogram input (length ", l, "):");
+    start_println("    [");
+    for (int i=0; i < l; i++) {
+        inter_println(d[i]);
+        if (i+1 < l)
+            inter_println(", ");
+    }
+    finis_println("]");
+    println("Histogram start");
+}
 void SeqHistogramBuilder::onExit()
 {
     println("Histogram done");
+
+    HistogramBuilder *sb = this;
+    intptr_t l = sb->domain_length();
+    uintptr_t *d = sb->output_data();
+    intptr_t tot = 0;
+    for (int i=0; i < l; i++) {
+        if (d[i] != 0) {
+            println(i, " : ", d[i]);
+            tot += d[i];
+        }
+    }
+    println("total: ", tot);
 }
 long long fib(int x)
 {
