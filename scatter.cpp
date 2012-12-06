@@ -156,9 +156,9 @@ class HelloBuilder : public WorkerBuilder {
     WorkerContext *newWorker(int i) { return new HelloWorker(i); }
 };
 
-void *Worker_1_IterFib(void *data);
+void *Worker_2_IterFib(void *data);
 class IterFibWorker : public WorkerContext {
-    void run() { Worker_1_IterFib(this); }
+    void run() { Worker_2_IterFib(this); }
 public: IterFibWorker(int i) : WorkerContext(i) { }
 };
 class IterFibBuilder : public WorkerBuilder {
@@ -214,7 +214,7 @@ long long fib(int x)
     return a;
 }
 
-void *Worker_1_IterFib(void *data)
+void *Worker_2_IterFib(void *data)
 {
     int tid;
     WorkerContext *w = (WorkerContext*)data;
