@@ -104,11 +104,22 @@ public:
     }
 };
 
-class WorkerContext : public PrintingHelpers
-{
+class LockingPrintingHelper : public PrintingHelpers {
     static pthread_mutex_t cout_mutex;
 public:
     static void init() { pthread_mutex_init(&cout_mutex, NULL); }
+private:
+    virtual void prior_printing() { cout_acq(); }
+    virtual void after_printing() { cout_rel(); }
+
+    void cout_acq() { pthread_mutex_lock(&cout_mutex); }
+    void cout_rel() { pthread_mutex_unlock(&cout_mutex); }
+};
+
+class WorkerContext : protected LockingPrintingHelper
+{
+public:
+    static void init() { LockingPrintingHelper::init(); }
     static void die(int i) { exit(i); }
 private:
     friend class WorkerBuilder;
@@ -137,19 +148,27 @@ private:
 public:
     int threadid() { return threadid_; }
 private:
-    virtual void prior_printing() { cout_acq(); }
-    virtual void after_printing() { cout_rel(); }
-
-    void cout_acq() { pthread_mutex_lock(&cout_mutex); }
-    void cout_rel() { pthread_mutex_unlock(&cout_mutex); }
+    void join() {
+        void *retval;
+        pthread_join(this->thread, &retval);
+    }
 };
 
-class WorkerBuilder
+class WorkerBuilder : protected LockingPrintingHelper
 {
 private:
     virtual WorkerContext *newWorker(int i) = 0;
 public:
-    virtual void wait_and_exit() { WorkerContext::wait_and_exit(); }
+    void wait_and_exit() {
+        for (int i=0; i < num_threads; i++) {
+            if (contexts[i] != NULL)
+                contexts[i]->join();
+        }
+        onExit();
+        WorkerContext::wait_and_exit();
+    }
+private:
+    virtual void onExit() { }
 
 public:
     WorkerBuilder(int num_threads_) : num_threads(num_threads_) {
@@ -180,24 +199,25 @@ private:
     WorkerContext **contexts;
 };
 
-pthread_mutex_t WorkerContext::cout_mutex;
+pthread_mutex_t LockingPrintingHelper::cout_mutex;
 
 class HelloWorker;
 void Worker_1_Hello(HelloWorker *data);
 class HelloWorker : public WorkerContext {
-    void run() { Worker_1_Hello(this); }
+    void run(); // { Worker_1_Hello(this); }
 public: HelloWorker(int i) : WorkerContext(i) { }
 };
 class HelloBuilder : public WorkerBuilder {
     WorkerContext *newWorker(int i) { return new HelloWorker(i); }
 public:
     HelloBuilder(int num_threads) : WorkerBuilder(num_threads) { }
+    void onExit() { println("Hello World done"); }
 };
 
 class IterFibWorker;
 void Worker_2_IterFib(IterFibWorker *data);
 class IterFibWorker : public WorkerContext {
-    void run() { Worker_2_IterFib(this); }
+    void run(); // { Worker_2_IterFib(this); }
 public: IterFibWorker(int i) : WorkerContext(i) { }
 };
 class IterFibBuilder : public WorkerBuilder {
@@ -238,7 +258,6 @@ int main(int argc, const char **argv)
     WorkerContext::init();
 
     // set up workers
-    WorkerContext **contexts = new WorkerContext*[args.num_threads];
     WorkerBuilder *builder;
     int nt = args.num_threads;
     switch (args.program) {
@@ -249,7 +268,6 @@ int main(int argc, const char **argv)
         WorkerContext::die(3);
     }
     builder->createWorkers();
-    //for (int i=0; i < args.num_threads; i++) { contexts[i] = builder->newWorker(i); }
 
     // all workers constructed; spawn each in its own thread.
     builder->spawnWorkers();
@@ -274,8 +292,9 @@ long long fib(int x)
     return a;
 }
 
-void Worker_2_IterFib(IterFibWorker *w)
+void IterFibWorker::run()
 {
+    IterFibWorker *w = this;
     int tid = w->threadid();
     w->println("Hello World!  Thread ID: ", tid);
 
@@ -310,9 +329,10 @@ void Worker_2_IterFib(IterFibWorker *w)
     pthread_exit(NULL);
 }
 
-void Worker_1_Hello(HelloWorker *w)
+void HelloWorker::run()
+//void Worker_1_Hello(HelloWorker *w)
 {
-    w->println("Hello World ", w->threadid());
+    println("Hello World ", threadid());
     pthread_exit(NULL);
 }
 
