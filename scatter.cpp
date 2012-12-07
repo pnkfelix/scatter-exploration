@@ -129,6 +129,48 @@ private:
     void cout_rel() { pthread_mutex_unlock(&cout_mutex); }
 };
 
+class SnapshotResourceUsage
+{
+    struct rusage r_usage;
+public:
+    SnapshotResourceUsage() { }
+    void take_snapshot() { getrusage(RUSAGE_SELF, &r_usage); }
+private:
+    void timeDuration(time_t start_s, suseconds_t start_us,
+                      time_t finis_s, suseconds_t finis_us,
+                      time_t *d_s_recv,
+                      suseconds_t *d_us_recv) const {
+        time_t ds;
+        suseconds_t dms;
+        if (finis_us >= start_us) {
+            ds = finis_s - start_s;
+            dms = finis_us - start_us;
+        } else {
+            ds = (finis_s - 1) - start_s;
+            dms = finis_us + 1000000 - start_us;
+        }
+        *d_s_recv = ds;
+        *d_us_recv = dms;
+    }
+
+public:
+    void userTimeDuration(SnapshotResourceUsage const &end,
+                          time_t *dseconds_recv,
+                          suseconds_t *dmicroseconds_recv) const {
+        timeDuration(r_usage.ru_utime.tv_sec, r_usage.ru_utime.tv_usec,
+                     end.r_usage.ru_utime.tv_sec, end.r_usage.ru_utime.tv_usec,
+                     dseconds_recv, dmicroseconds_recv);
+    }
+
+    void systemTimeDuration(SnapshotResourceUsage const &end,
+                            time_t *dseconds_recv,
+                            suseconds_t *dmicroseconds_recv) const {
+        timeDuration(r_usage.ru_stime.tv_sec, r_usage.ru_stime.tv_usec,
+                     end.r_usage.ru_stime.tv_sec, end.r_usage.ru_stime.tv_usec,
+                     dseconds_recv, dmicroseconds_recv);
+    }
+};
+
 class WorkerContext : protected LockingPrintingHelper
 {
 public:
@@ -188,6 +230,7 @@ public:
             if (contexts[i] != NULL)
                 contexts[i]->join();
         }
+        finis_resource_usage.take_snapshot();
         onExit();
         WorkerContext::wait_and_exit();
     }
@@ -202,6 +245,7 @@ public:
         onStart();
         createWorkers();
         // all workers constructed; spawn each in its own thread.
+        start_resource_usage.take_snapshot();
         spawnWorkers();
     }
 private:
@@ -226,6 +270,8 @@ public:
 private:
     int num_threads;
     WorkerContext **contexts;
+    SnapshotResourceUsage start_resource_usage;
+    SnapshotResourceUsage finis_resource_usage;
 };
 
 pthread_mutex_t LockingPrintingHelper::cout_mutex;
