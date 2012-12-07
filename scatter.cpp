@@ -16,12 +16,25 @@ public:
     static int max_nthreads;
     static int max_rep;
     static int max_program;
-
     int num_threads;
     int rep;
     int program;
+    int seed_u;
+    int seed_z;
+    int input_length;
+    int domain_size;
+    int verbosity;
 
-    ParseArgs() : num_threads(1), rep(1), program(1) { }
+    ParseArgs()
+    : num_threads(1)
+    , rep(1)
+    , program(1)
+    , seed_u(1)
+    , seed_z(1)
+    , input_length(20)
+    , domain_size(10)
+    , verbosity(1)
+    { }
 
 public:
     int parse_all(int argc, const char **argv);
@@ -286,8 +299,10 @@ public:
     uint32_t* input_data() { return input; }
     intptr_t domain_length() { return domain_len; }
     uintptr_t* output_data() { return output; }
-    HistogramBuilder(intptr_t input_length, int32_t domain_length)
-        : input_len(input_length), domain_len(domain_length) {
+    HistogramBuilder(intptr_t input_length, int32_t domain_length, int verbosity_)
+        : input_len(input_length)
+        , domain_len(domain_length)
+        , verbosity(verbosity_) {
         input = new uint32_t[input_len];
         output = new uintptr_t[domain_len];
         for (intptr_t i = 0; i < input_len; i++) {
@@ -301,11 +316,16 @@ public:
         delete[] input;
         delete[] output;
     }
+protected:
+    void printInput();
 private:
     intptr_t input_len;
     uint32_t* input;
     intptr_t domain_len;
     uintptr_t *output;
+    LockingPrintingHelper p;
+protected:
+    int verbosity;
 };
 
 class SeqHistogramBuilder;
@@ -320,9 +340,9 @@ protected:
 class SeqHistogramBuilder : public WorkerBuilder, public HistogramBuilder {
     WorkerContext *newWorker(int i) { return new SeqHistogramWorker(this, i); }
 public:
-    SeqHistogramBuilder(int num_threads, int input_len, int domain_size)
+    SeqHistogramBuilder(int num_threads, int input_len, int domain_size, int verbosity)
         : WorkerBuilder(num_threads)
-        , HistogramBuilder(input_len, domain_size) { }
+        , HistogramBuilder(input_len, domain_size, verbosity) { }
     void onStart();
     void onExit();
     intptr_t resultSummary();
@@ -350,7 +370,7 @@ int main(int argc, const char **argv)
     switch (args.program) {
     case 1: builder = new HelloBuilder(nt); break;
     case 2: builder = new IterFibBuilder(nt); break;
-    case 3: builder = new SeqHistogramBuilder(nt, 20, 10); break;
+    case 3: builder = new SeqHistogramBuilder(nt, args.input_length, args.domain_size, args.verbosity); break;
     default: out << "unmatched program number: " << args.program << endl;
         WorkerContext::die(3);
     }
@@ -380,21 +400,26 @@ void SeqHistogramWorker::run()
     }
 }
 
-void SeqHistogramBuilder::onStart()
+void HistogramBuilder::printInput()
 {
     HistogramBuilder *sb = this;
     intptr_t l = sb->input_length();
     uint32_t *d = sb->input_data();
 
-    println("Histogram input (length ", l, "):");
-    start_println("    [");
+    p.println("Histogram input (length ", l, "):");
+    p.start_println("    [");
     for (int i=0; i < l; i++) {
-        inter_println(d[i]);
+        p.inter_println(d[i]);
         if (i+1 < l)
-            inter_println(", ");
+            p.inter_println(", ");
     }
-    finis_println("]");
-    println("Histogram start");
+    p.finis_println("]");
+}
+
+void SeqHistogramBuilder::onStart()
+{
+    if (verbosity > 1) printInput();
+    WorkerBuilder::println("Histogram start");
 }
 void SeqHistogramBuilder::onExit()
 {
@@ -485,9 +510,14 @@ void HelloWorker::run()
 
 void ParseArgs::print_values()
 {
-    printf("num_threads: %d\n", num_threads);
-    printf("rep:         %d\n", rep);
-    printf("program:     %d\n", program);
+    printf("num_threads:  %d\n", num_threads);
+    printf("rep:          %d\n", rep);
+    printf("program:      %d\n", program);
+    printf("seed_u:       %d\n", seed_u);
+    printf("seed_z:       %d\n", seed_z);
+    printf("input_length: %d\n", input_length);
+    printf("domain_size:  %d\n", domain_size);
+    printf("verbosity:    %d\n", verbosity);
 }
 
 int ParseArgs::parse_all(int argc, const char **argv)
@@ -498,6 +528,11 @@ int ParseArgs::parse_all(int argc, const char **argv)
         } else if (arg(argc, argv, &i, "-nthreads", &num_threads, max_nthreads)) {
         } else if (arg(argc, argv, &i, "-rep", &rep, max_rep)) {
         } else if (arg(argc, argv, &i, "-program", &program, max_program)) {
+        } else if (arg(argc, argv, &i, "-seed_u", &seed_u, INT_MAX)) {
+        } else if (arg(argc, argv, &i, "-seed_z", &seed_z, INT_MAX)) {
+        } else if (arg(argc, argv, &i, "-input_length", &input_length, INT_MAX)) {
+        } else if (arg(argc, argv, &i, "-domain_size", &domain_size, INT_MAX)) {
+        } else if (arg(argc, argv, &i, "-verbosity", &verbosity, 10)) {
         } else {
             printf("unknown argument: `%s', exiting\n", argv[i]);
             return 2;
