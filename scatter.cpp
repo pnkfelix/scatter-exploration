@@ -362,7 +362,7 @@ int main(int argc, const char **argv)
 void SeqHistogramWorker::run()
 {
     HistogramBuilder *sb = commonBuilder;
-    if (threadid() == 1) {
+    if (threadid() == 0) {
         intptr_t l = sb->input_length();
         uint32_t *d = sb->input_data();
         intptr_t m = sb->domain_length();
