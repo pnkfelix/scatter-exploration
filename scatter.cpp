@@ -21,7 +21,7 @@ public:
     int program;
     int seed_u;
     int seed_z;
-    int input_length;
+    int64_t input_length;
     int domain_size;
     int verbosity;
 
@@ -40,8 +40,10 @@ public:
     int parse_all(int argc, const char **argv);
     void print_values();
 private:
+    template<typename INT_T>
     bool arg(const int argc, const char **argv,
-             int *pi, const char* option, int *result, int max_value);
+             int *pi, const char* option,
+             INT_T *result, INT_T min_value, INT_T max_value);
 };
 
 int ParseArgs::max_nthreads = 100;
@@ -267,6 +269,12 @@ public:
         }
         delete[] contexts;
     }
+protected:
+    void takeSnapshotStart() { start_resource_usage.take_snapshot(); }
+    void takeSnapshotFinis() { finis_resource_usage.take_snapshot(); }
+    void userTimeDuration(time_t *dseconds, suseconds_t *duseconds) {
+        start_resource_usage.userTimeDuration(finis_resource_usage, dseconds, duseconds);
+    }
 private:
     int num_threads;
     WorkerContext **contexts;
@@ -341,19 +349,23 @@ private:
 class HistogramBuilder : private MarsagliaRNG
 {
 public:
-    intptr_t input_length() { return input_len; }
+    int64_t input_length() { return input_len; }
     uint32_t* input_data() { return input; }
     intptr_t domain_length() { return domain_len; }
     uintptr_t* output_data() { return output; }
-    HistogramBuilder(intptr_t input_length, int32_t domain_length, int verbosity_)
+    HistogramBuilder(int64_t input_length, int32_t domain_length, int verbosity_)
         : input_len(input_length)
         , domain_len(domain_length)
         , verbosity(verbosity_) {
         input = new uint32_t[input_len];
         output = new uintptr_t[domain_len];
+    }
+    void build_input() {
         for (intptr_t i = 0; i < input_len; i++) {
-            input[i] = get(domain_length);
+            input[i] = get(domain_len);
         }
+    }
+    void clear_output() {
         for (intptr_t i = 0; i < domain_len; i++) {
             output[i] = -1;
         }
@@ -364,6 +376,7 @@ public:
     }
 protected:
     void printInput();
+    void printOutput();
 private:
     intptr_t input_len;
     uint32_t* input;
@@ -386,12 +399,15 @@ protected:
 class SeqHistogramBuilder : public WorkerBuilder, public HistogramBuilder {
     WorkerContext *newWorker(int i) { return new SeqHistogramWorker(this, i); }
 public:
-    SeqHistogramBuilder(int num_threads, int input_len, int domain_size, int verbosity)
+    SeqHistogramBuilder(int num_threads, int64_t input_len, int domain_size, int verbosity)
         : WorkerBuilder(num_threads)
         , HistogramBuilder(input_len, domain_size, verbosity) { }
     void onStart();
     void onExit();
     intptr_t resultSummary();
+private:
+    time_t build_dseconds;
+    suseconds_t build_dmicroseconds;
 };
 
 // FINIS CLASS AND DATA DEFINITIONS
@@ -433,10 +449,10 @@ void SeqHistogramWorker::run()
         uint32_t *d = sb->input_data();
         intptr_t m = sb->domain_length();
         uintptr_t *o = sb->output_data();
-        for (int i = 0; i < m; i++) {
+        for (intptr_t i = 0; i < m; i++) {
             o[i] = 0;
         }
-        for (int i = 0; i < l; i++) {
+        for (intptr_t i = 0; i < l; i++) {
             uint32_t x = d[i];
             if (x >= m) { println("whoops", x); exit(99); }
             o[x] += 1;
@@ -462,30 +478,51 @@ void HistogramBuilder::printInput()
     p.finis_println("]");
 }
 
-void SeqHistogramBuilder::onStart()
+void HistogramBuilder::printOutput()
 {
-    if (verbosity > 1) printInput();
-    WorkerBuilder::println("Histogram start");
-}
-void SeqHistogramBuilder::onExit()
-{
-    println("Histogram done");
-
     HistogramBuilder *sb = this;
     intptr_t l = sb->domain_length();
     uintptr_t *d = sb->output_data();
     intptr_t tot = 0;
     for (int i=0; i < l; i++) {
         if (d[i] != 0) {
-            println(i, " : ", d[i]);
+            p.println(i, " : ", d[i]);
             tot += d[i];
         }
     }
-    println("total: ", tot);
+    p.println("total: ", tot);
+}
+
+void SeqHistogramBuilder::onStart()
+{
+    takeSnapshotStart();
+    build_input();
+    clear_output();
+    takeSnapshotFinis();
+    userTimeDuration(&build_dseconds, &build_dmicroseconds);
+    if (verbosity > 2) printInput();
+    WorkerBuilder::println("Histogram start");
+}
+void SeqHistogramBuilder::onExit()
+{
+    println("Histogram done");
+
+    time_t dseconds;
+    suseconds_t dmicroseconds;
+
+    takeSnapshotFinis();
+    userTimeDuration(&dseconds, &dmicroseconds);
+
+    println("seconds: ", dseconds, " microseconds: ", dmicroseconds);
+
+    if (verbosity > 1) printOutput();
 
     stringstream ss;
     ss << std::hex << resultSummary();
     println("summary: 0x", ss.str());
+
+    println("inp build time seconds: ", build_dseconds, " microseconds: ", build_dmicroseconds);
+    println("histogram time seconds: ", dseconds, " microseconds: ", dmicroseconds);
 }
 intptr_t SeqHistogramBuilder::resultSummary() {
     HistogramBuilder *sb = this;
@@ -561,7 +598,7 @@ void ParseArgs::print_values()
     printf("program:      %d\n", program);
     printf("seed_u:       %d\n", seed_u);
     printf("seed_z:       %d\n", seed_z);
-    printf("input_length: %d\n", input_length);
+    printf("input_length: %lld\n", input_length);
     printf("domain_size:  %d\n", domain_size);
     printf("verbosity:    %d\n", verbosity);
 }
@@ -571,14 +608,14 @@ int ParseArgs::parse_all(int argc, const char **argv)
     for (int i=1; i<argc; i++) {
         // printf("Argument %d: %s\n", i, argv[i]);
         if (false) {
-        } else if (arg(argc, argv, &i, "-nthreads", &num_threads, max_nthreads)) {
-        } else if (arg(argc, argv, &i, "-rep", &rep, max_rep)) {
-        } else if (arg(argc, argv, &i, "-program", &program, max_program)) {
-        } else if (arg(argc, argv, &i, "-seed_u", &seed_u, INT_MAX)) {
-        } else if (arg(argc, argv, &i, "-seed_z", &seed_z, INT_MAX)) {
-        } else if (arg(argc, argv, &i, "-input_length", &input_length, INT_MAX)) {
-        } else if (arg(argc, argv, &i, "-domain_size", &domain_size, INT_MAX)) {
-        } else if (arg(argc, argv, &i, "-verbosity", &verbosity, 10)) {
+        } else if (arg(argc, argv, &i, "-nthreads", &num_threads, 1, max_nthreads)) {
+        } else if (arg(argc, argv, &i, "-rep", &rep, 1, max_rep)) {
+        } else if (arg(argc, argv, &i, "-program", &program, 1, max_program)) {
+        } else if (arg(argc, argv, &i, "-seed_u", &seed_u, 1, INT_MAX)) {
+        } else if (arg(argc, argv, &i, "-seed_z", &seed_z, 1, INT_MAX)) {
+        } else if (arg(argc, argv, &i, "-input_length", &input_length, 1LL, INT64_MAX)) {
+        } else if (arg(argc, argv, &i, "-domain_size", &domain_size, 1, INT_MAX)) {
+        } else if (arg(argc, argv, &i, "-verbosity", &verbosity, 0, 10)) {
         } else {
             printf("unknown argument: `%s', exiting\n", argv[i]);
             return 2;
@@ -592,16 +629,17 @@ int ParseArgs::parse_all(int argc, const char **argv)
 // otherwise false.  Also, if returns true, next arg can be read as
 // integer, and the resulting integer is <= max_value, then *result
 // holds resulting integer; otherwise result is unchanged.
+template<typename INT_T>
 bool ParseArgs::arg(const int argc, const char **argv,
-                    int *pi, const char* option, int *result, int max_value)
+                    int *pi, const char* option, INT_T *result, INT_T min_value, INT_T max_value)
 {
     int i = *pi;
     string arg(argv[i]);
     if (arg.compare(option) == 0) {
         if (i+1 < argc) {
             arg = string(argv[i+1]);
-            int temp;
-            if ((stringstream(arg) >> temp) && temp > 0 && temp <= max_value) {
+            INT_T temp;
+            if ((stringstream(arg) >> temp) && temp >= min_value && temp <= max_value) {
                 *result = temp;
             }
             (*pi)++;
