@@ -227,8 +227,12 @@ private:
     virtual intptr_t resultSummary() = 0;
 
 public:
+    int num_threads() const {
+        return m_num_threads;
+    }
+
     void wait_and_exit() {
-        for (int i=0; i < num_threads; i++) {
+        for (int i=0; i < m_num_threads; i++) {
             if (contexts[i] != NULL)
                 contexts[i]->join();
         }
@@ -237,7 +241,7 @@ public:
         WorkerContext::wait_and_exit();
     }
 public:
-    WorkerBuilder(int num_threads_) : num_threads(num_threads_) {
+    WorkerBuilder(int num_threads) : m_num_threads(num_threads) {
         contexts = new WorkerContext*[num_threads];
         for (int i=0; i < num_threads; i++) {
             contexts[i] = NULL;
@@ -252,19 +256,19 @@ public:
     }
 private:
     void createWorkers() {
-        for (int i=0; i < num_threads; i++) {
+        for (int i=0; i < m_num_threads; i++) {
             contexts[i] = newWorker(i);
         }
     }
     void spawnWorkers() {
-        for (int i=0; i < num_threads; i++) {
+        for (int i=0; i < m_num_threads; i++) {
             contexts[i]->println("main() : creating thread, ", i);
             contexts[i]->spawn();
         }
     }
 public:
     virtual ~WorkerBuilder() {
-        for (int i=0; i < num_threads; i++) {
+        for (int i=0; i < m_num_threads; i++) {
             contexts[i] = NULL;
         }
         delete[] contexts;
@@ -276,7 +280,7 @@ protected:
         start_resource_usage.userTimeDuration(finis_resource_usage, dseconds, duseconds);
     }
 private:
-    int num_threads;
+    const int m_num_threads;
     WorkerContext **contexts;
     SnapshotResourceUsage start_resource_usage;
     SnapshotResourceUsage finis_resource_usage;
@@ -349,10 +353,10 @@ private:
 class HistogramBuilder : private MarsagliaRNG
 {
 public:
-    int64_t input_length() { return input_len; }
-    uint32_t* input_data() { return input; }
-    intptr_t domain_length() { return domain_len; }
-    uintptr_t* output_data() { return output; }
+    int64_t input_length() const { return input_len; }
+    uint32_t const* input_data() const { return input; }
+    intptr_t domain_length() const { return domain_len; }
+    uintptr_t* output_data() const { return output; }
     HistogramBuilder(int64_t input_length, int32_t domain_length, int verbosity_)
         : input_len(input_length)
         , domain_len(domain_length)
@@ -383,23 +387,14 @@ private:
     intptr_t domain_len;
     uintptr_t *output;
     LockingPrintingHelper p;
-protected:
-    int verbosity;
+public:
+    const int verbosity;
 };
 
-class SeqHistogramBuilder;
-class SeqHistogramWorker : public WorkerContext {
-    void run();
-    friend class SeqHistogramBuilder;
-    SeqHistogramWorker(HistogramBuilder *builder_, int i)
-        : WorkerContext(i), commonBuilder(builder_) { }
+class CommonHistogramBuilder : public WorkerBuilder, public HistogramBuilder
+{
 protected:
-    HistogramBuilder *commonBuilder;
-};
-class SeqHistogramBuilder : public WorkerBuilder, public HistogramBuilder {
-    WorkerContext *newWorker(int i) { return new SeqHistogramWorker(this, i); }
-public:
-    SeqHistogramBuilder(int num_threads, int64_t input_len, int domain_size, int verbosity)
+    CommonHistogramBuilder(int num_threads, int64_t input_len, int domain_size, int verbosity)
         : WorkerBuilder(num_threads)
         , HistogramBuilder(input_len, domain_size, verbosity) { }
     void onStart();
@@ -408,6 +403,38 @@ public:
 private:
     time_t build_dseconds;
     suseconds_t build_dmicroseconds;
+};
+
+class SeqHistogramBuilder;
+class SeqHistogramWorker : public WorkerContext {
+    void run();
+    friend class SeqHistogramBuilder;
+    SeqHistogramWorker(CommonHistogramBuilder *builder_, int i)
+        : WorkerContext(i), commonBuilder(builder_) { }
+protected:
+    CommonHistogramBuilder *commonBuilder;
+};
+class SeqHistogramBuilder : public CommonHistogramBuilder {
+    WorkerContext *newWorker(int i) { return new SeqHistogramWorker(this, i); }
+public:
+    SeqHistogramBuilder(int num_threads, int64_t input_len, int domain_size, int verbosity)
+        : CommonHistogramBuilder(num_threads, input_len, domain_size, verbosity) {}
+};
+
+class DivDomainHistogramBuilder;
+class DivDomainHistogramWorker : public WorkerContext {
+    void run();
+    friend class DivDomainHistogramBuilder;
+    DivDomainHistogramWorker(CommonHistogramBuilder *builder_, int i)
+        : WorkerContext(i), commonBuilder(builder_) { }
+protected:
+    CommonHistogramBuilder *commonBuilder;
+};
+class DivDomainHistogramBuilder : public CommonHistogramBuilder {
+    WorkerContext *newWorker(int i) { return new DivDomainHistogramWorker(this, i); }
+public:
+    DivDomainHistogramBuilder(int num_threads, int64_t input_len, int domain_size, int verbosity)
+        : CommonHistogramBuilder(num_threads, input_len, domain_size, verbosity) {}
 };
 
 // FINIS CLASS AND DATA DEFINITIONS
@@ -433,6 +460,7 @@ int main(int argc, const char **argv)
     case 1: builder = new HelloBuilder(nt); break;
     case 2: builder = new IterFibBuilder(nt); break;
     case 3: builder = new SeqHistogramBuilder(nt, args.input_length, args.domain_size, args.verbosity); break;
+    case 4: builder = new DivDomainHistogramBuilder(nt, args.input_length, args.domain_size, args.verbosity); break;
     default: out << "unmatched program number: " << args.program << endl;
         WorkerContext::die(3);
     }
@@ -446,7 +474,7 @@ void SeqHistogramWorker::run()
     HistogramBuilder *sb = commonBuilder;
     if (threadid() == 0) {
         intptr_t l = sb->input_length();
-        uint32_t *d = sb->input_data();
+        uint32_t const* const d = sb->input_data();
         intptr_t m = sb->domain_length();
         uintptr_t *o = sb->output_data();
         for (intptr_t i = 0; i < m; i++) {
@@ -462,11 +490,40 @@ void SeqHistogramWorker::run()
     }
 }
 
+void DivDomainHistogramWorker::run()
+{
+    CommonHistogramBuilder const* sb = commonBuilder;
+    int nt = sb->num_threads();
+    int64_t dom = sb->domain_length();
+    int64_t subdom_size = (dom + (nt - 1)) / nt;
+    int id = threadid();
+    int64_t subdom_start = id * subdom_size;
+    int64_t subdom_finis = subdom_start + subdom_size;
+
+    if (0 && sb->verbosity > 1)
+        println("worker ", id, " does domain [",
+                subdom_start, " -- ", subdom_finis, ").");
+
+    intptr_t l = sb->input_length();
+    uint32_t const* const d = sb->input_data();
+    intptr_t m = sb->domain_length();
+    uintptr_t *o = sb->output_data();
+    for (intptr_t i = subdom_start; i < subdom_finis; i++) {
+        o[i] = 0;
+    }
+    for (intptr_t i = 0; i < l; i++) {
+        uint32_t x = d[i];
+        if (x >= m) { println("whoops", x); exit(99); }
+        if (subdom_start <= x && x < subdom_finis)
+            o[x] += 1;
+    }
+}
+
 void HistogramBuilder::printInput()
 {
     HistogramBuilder *sb = this;
     intptr_t l = sb->input_length();
-    uint32_t *d = sb->input_data();
+    uint32_t const* const d = sb->input_data();
 
     p.println("Histogram input (length ", l, "):");
     p.start_println("    [");
@@ -493,7 +550,7 @@ void HistogramBuilder::printOutput()
     p.println("total: ", tot);
 }
 
-void SeqHistogramBuilder::onStart()
+void CommonHistogramBuilder::onStart()
 {
     takeSnapshotStart();
     build_input();
@@ -503,7 +560,8 @@ void SeqHistogramBuilder::onStart()
     if (verbosity > 2) printInput();
     WorkerBuilder::println("Histogram start");
 }
-void SeqHistogramBuilder::onExit()
+
+void CommonHistogramBuilder::onExit()
 {
     println("Histogram done");
 
@@ -524,7 +582,7 @@ void SeqHistogramBuilder::onExit()
     println("inp build time seconds: ", build_dseconds, " microseconds: ", build_dmicroseconds);
     println("histogram time seconds: ", dseconds, " microseconds: ", dmicroseconds);
 }
-intptr_t SeqHistogramBuilder::resultSummary() {
+intptr_t CommonHistogramBuilder::resultSummary() {
     HistogramBuilder *sb = this;
     intptr_t l = sb->domain_length();
     uintptr_t *d = sb->output_data();
@@ -609,6 +667,8 @@ int ParseArgs::parse_all(int argc, const char **argv)
         // printf("Argument %d: %s\n", i, argv[i]);
         if (false) {
         } else if (arg(argc, argv, &i, "-nthreads", &num_threads, 1, max_nthreads)) {
+        } else if (arg(argc, argv, &i, "-num_threads", &num_threads, 1, max_nthreads)) {
+        } else if (arg(argc, argv, &i, "-nt", &num_threads, 1, max_nthreads)) {
         } else if (arg(argc, argv, &i, "-rep", &rep, 1, max_rep)) {
         } else if (arg(argc, argv, &i, "-program", &program, 1, max_program)) {
         } else if (arg(argc, argv, &i, "-seed_u", &seed_u, 1, INT_MAX)) {
