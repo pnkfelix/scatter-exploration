@@ -614,8 +614,8 @@ intptr_t CommonHistogramBuilder::resultSummary() {
     intptr_t l = sb->domain_length();
     uintptr_t *d = sb->output_data();
     intptr_t accum = 0;
-    for (int i=0; i < l; i++) {
-        accum <<= 1;
+    for (intptr_t i=0; i < l; i++) {
+        accum = (accum << 1) | ((accum >> sizeof(accum)) & 0x1);
         accum ^= intptr_t(d[i]);
     }
     return accum;
