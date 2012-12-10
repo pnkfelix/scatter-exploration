@@ -256,7 +256,7 @@ public:
             if (contexts[i] != NULL)
                 contexts[i]->join();
         }
-        finis_resource_usage.take_snapshot();
+        takeSnapshotFinis();
         onExit();
         // WorkerContext::wait_and_exit();
     }
@@ -271,7 +271,7 @@ public:
         onStart();
         createWorkers();
         // all workers constructed; spawn each in its own thread.
-        start_resource_usage.take_snapshot();
+        takeSnapshotStart();
         spawnWorkers();
     }
 private:
@@ -595,7 +595,6 @@ void CommonHistogramBuilder::onExit()
     time_t dseconds;
     suseconds_t dmicroseconds;
 
-    takeSnapshotFinis();
     userTimeDuration(&dseconds, &dmicroseconds);
 
     println("seconds: ", dseconds, " microseconds: ", dmicroseconds);
