@@ -261,9 +261,11 @@ public:
         // WorkerContext::wait_and_exit();
     }
 public:
-    WorkerBuilder(int num_threads) : m_num_threads(num_threads) {
-        contexts = new WorkerContext*[num_threads];
-        for (int i=0; i < num_threads; i++) {
+    WorkerBuilder(ParseArgs const& args)
+        : m_num_threads(args.num_threads)
+        , m_args(args) {
+        contexts = new WorkerContext*[args.num_threads];
+        for (int i=0; i < m_num_threads; i++) {
             contexts[i] = NULL;
         }
     }
@@ -282,7 +284,7 @@ private:
     }
     void spawnWorkers() {
         for (int i=0; i < m_num_threads; i++) {
-            contexts[i]->println("main() : creating thread, ", i);
+            if (m_args.verbosity > 1) contexts[i]->println("main() : creating thread, ", i);
             contexts[i]->spawn();
         }
     }
@@ -307,7 +309,8 @@ protected:
                                                    duseconds);
     }
 private:
-    const int m_num_threads;
+    int const m_num_threads;
+    ParseArgs const& m_args;
     WorkerContext **contexts;
     SnapshotResourceUsage start_resource_usage;
     SnapshotResourceUsage finis_resource_usage;
@@ -323,7 +326,7 @@ public: HelloWorker(int i) : WorkerContext(i) { }
 class HelloBuilder : public WorkerBuilder {
     WorkerContext *newWorker(int i) { return new HelloWorker(i); }
 public:
-    HelloBuilder(int num_threads) : WorkerBuilder(num_threads) { }
+    HelloBuilder(ParseArgs const& args) : WorkerBuilder(args) { }
     void onExit() { println("Hello World done"); }
     void onStart() { println("Hello World start"); }
     intptr_t resultSummary() { return 0; }
@@ -337,7 +340,7 @@ public: IterFibWorker(int i) : WorkerContext(i) { }
 class IterFibBuilder : public WorkerBuilder {
     WorkerContext *newWorker(int i) { return new IterFibWorker(i); }
 public:
-    IterFibBuilder(int num_threads) : WorkerBuilder(num_threads) { }
+    IterFibBuilder(ParseArgs const& args) : WorkerBuilder(args) { }
     void onExit() { println("Iterated Fibonacci done"); }
     void onStart() { println("Iterated Fibonacci start"); }
     intptr_t resultSummary() { return 0; }
@@ -384,10 +387,10 @@ public:
     uint32_t const* input_data() const { return input; }
     intptr_t domain_length() const { return domain_len; }
     uintptr_t* output_data() const { return output; }
-    HistogramBuilder(int64_t input_length, int32_t domain_length, int verbosity_)
-        : input_len(input_length)
-        , domain_len(domain_length)
-        , verbosity(verbosity_) {
+    HistogramBuilder(ParseArgs const& args)
+        : input_len(args.input_length)
+        , domain_len(args.domain_size)
+        , args(args) {
         input = new uint32_t[input_len];
         output = new uintptr_t[domain_len];
     }
@@ -415,15 +418,15 @@ private:
     uintptr_t *output;
     LockingPrintingHelper p;
 public:
-    const int verbosity;
+    ParseArgs const& args;
 };
 
 class CommonHistogramBuilder : public WorkerBuilder, public HistogramBuilder
 {
 protected:
-    CommonHistogramBuilder(int num_threads, int64_t input_len, int domain_size, int verbosity)
-        : WorkerBuilder(num_threads)
-        , HistogramBuilder(input_len, domain_size, verbosity) { }
+    CommonHistogramBuilder(ParseArgs const& args)
+        : WorkerBuilder(args)
+        , HistogramBuilder(args) { }
     void onStart();
     void onExit();
     intptr_t resultSummary();
@@ -444,8 +447,8 @@ protected:
 class SeqHistogramBuilder : public CommonHistogramBuilder {
     WorkerContext *newWorker(int i) { return new SeqHistogramWorker(this, i); }
 public:
-    SeqHistogramBuilder(int num_threads, int64_t input_len, int domain_size, int verbosity)
-        : CommonHistogramBuilder(num_threads, input_len, domain_size, verbosity) {}
+    SeqHistogramBuilder(ParseArgs const& args)
+        : CommonHistogramBuilder(args) {}
 };
 
 class DivDomainHistogramBuilder;
@@ -460,8 +463,8 @@ protected:
 class DivDomainHistogramBuilder : public CommonHistogramBuilder {
     WorkerContext *newWorker(int i) { return new DivDomainHistogramWorker(this, i); }
 public:
-    DivDomainHistogramBuilder(int num_threads, int64_t input_len, int domain_size, int verbosity)
-        : CommonHistogramBuilder(num_threads, input_len, domain_size, verbosity) {}
+    DivDomainHistogramBuilder(ParseArgs const& args)
+        : CommonHistogramBuilder(args) {}
 };
 
 // FINIS CLASS AND DATA DEFINITIONS
@@ -484,10 +487,10 @@ int main(int argc, const char **argv)
     WorkerBuilder *builder;
     int nt = args.num_threads;
     switch (args.program) {
-    case 1: builder = new HelloBuilder(nt); break;
-    case 2: builder = new IterFibBuilder(nt); break;
-    case 3: builder = new SeqHistogramBuilder(nt, args.input_length, args.domain_size, args.verbosity); break;
-    case 4: builder = new DivDomainHistogramBuilder(nt, args.input_length, args.domain_size, args.verbosity); break;
+    case 1: builder = new HelloBuilder(args); break;
+    case 2: builder = new IterFibBuilder(args); break;
+    case 3: builder = new SeqHistogramBuilder(args); break;
+    case 4: builder = new DivDomainHistogramBuilder(args); break;
     default: out << "unmatched program number: " << args.program << endl;
         WorkerContext::die(3);
     }
@@ -504,6 +507,7 @@ void SeqHistogramWorker::run()
         uint32_t const* const d = sb->input_data();
         intptr_t m = sb->domain_length();
         uintptr_t *o = sb->output_data();
+
         for (intptr_t i = 0; i < m; i++) {
             o[i] = 0;
         }
@@ -527,7 +531,7 @@ void DivDomainHistogramWorker::run()
     int64_t subdom_start = id * subdom_size;
     int64_t subdom_finis = subdom_start + subdom_size;
 
-    if (0 && sb->verbosity > 1)
+    if (0 && sb->args.verbosity > 1)
         println("worker ", id, " does domain [",
                 subdom_start, " -- ", subdom_finis, ").");
 
@@ -583,8 +587,8 @@ void CommonHistogramBuilder::onStart()
     build_input();
     clear_output();
     takeSnapshotFinis();
-    userTimeDuration(&build_dseconds, &build_dmicroseconds);
-    if (verbosity > 2) printInput();
+    wallclockTimeDuration(&build_dseconds, &build_dmicroseconds);
+    if (args.verbosity > 2) printInput();
     WorkerBuilder::println("Histogram start");
 }
 
@@ -592,21 +596,26 @@ void CommonHistogramBuilder::onExit()
 {
     println("Histogram done");
 
-    time_t dseconds;
-    suseconds_t dmicroseconds;
+    time_t user_dseconds;
+    suseconds_t user_dmicroseconds;
 
-    userTimeDuration(&dseconds, &dmicroseconds);
+    time_t wall_dseconds;
+    suseconds_t wall_dmicroseconds;
 
-    println("seconds: ", dseconds, " microseconds: ", dmicroseconds);
+    userTimeDuration(&user_dseconds, &user_dmicroseconds);
+    wallclockTimeDuration(&wall_dseconds, &wall_dmicroseconds);
 
-    if (verbosity > 1) printOutput();
+    if (args.verbosity > 1) printOutput();
 
     stringstream ss;
     ss << std::hex << resultSummary();
     println("summary: 0x", ss.str());
 
-    println("inp build time seconds: ", build_dseconds, " microseconds: ", build_dmicroseconds);
-    println("histogram time seconds: ", dseconds, " microseconds: ", dmicroseconds);
+    println("inp build seconds: ", build_dseconds, " microseconds: ", build_dmicroseconds);
+    
+    println("user time seconds: ", user_dseconds, " microseconds: ", user_dmicroseconds);
+
+    println("wallclock seconds: ", wall_dseconds, " microseconds: ", wall_dmicroseconds);
 }
 intptr_t CommonHistogramBuilder::resultSummary() {
     HistogramBuilder *sb = this;
