@@ -1,4 +1,5 @@
 #include <iostream>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <math.h>
@@ -429,6 +430,8 @@ protected:
         , HistogramBuilder(args) { }
     void onStart();
     void onExit();
+    void println_seconds(const char* prefix,
+                         time_t dseconds, suseconds_t dmicroseconds);
     intptr_t resultSummary();
 private:
     time_t build_dseconds;
@@ -592,6 +595,14 @@ void CommonHistogramBuilder::onStart()
     WorkerBuilder::println("Histogram start");
 }
 
+void CommonHistogramBuilder::println_seconds(const char* prefix,
+                                             time_t dseconds,
+                                             suseconds_t dmicroseconds)
+{
+    // println(prefix, "seconds: ", dseconds, " microseconds: ", dmicroseconds);
+    println(prefix, " seconds: ", dseconds, ".", setw(6), setfill('0'), dmicroseconds);
+}
+
 void CommonHistogramBuilder::onExit()
 {
     println("Histogram done");
@@ -611,11 +622,11 @@ void CommonHistogramBuilder::onExit()
     ss << std::hex << resultSummary();
     println("summary: 0x", ss.str());
 
-    println("inp build seconds: ", build_dseconds, " microseconds: ", build_dmicroseconds);
-    
-    println("user time seconds: ", user_dseconds, " microseconds: ", user_dmicroseconds);
+    println_seconds("inp build", build_dseconds, build_dmicroseconds);
 
-    println("wallclock seconds: ", wall_dseconds, " microseconds: ", wall_dmicroseconds);
+    println_seconds("user time", user_dseconds, user_dmicroseconds);
+
+    println_seconds("wallclock", wall_dseconds, wall_dmicroseconds);
 }
 intptr_t CommonHistogramBuilder::resultSummary() {
     HistogramBuilder *sb = this;
