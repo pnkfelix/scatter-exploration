@@ -186,7 +186,8 @@ private:
     static void *run_worker(void *data) {
         WorkerContext *w = (WorkerContext*)data;
         w->run();
-        pthread_exit(NULL);
+        // pthread_exit(NULL);
+        return NULL;
     }
 
 public:
@@ -243,7 +244,7 @@ public:
         }
         finis_resource_usage.take_snapshot();
         onExit();
-        WorkerContext::wait_and_exit();
+        // WorkerContext::wait_and_exit();
     }
 public:
     WorkerBuilder(int num_threads) : m_num_threads(num_threads) {
