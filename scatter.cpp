@@ -251,7 +251,7 @@ public:
         return m_num_threads;
     }
 
-    NO_INLINE void wait_and_exit() {
+    void wait_and_exit() {
         for (int i=0; i < m_num_threads; i++) {
             if (contexts[i] != NULL)
                 contexts[i]->join();
