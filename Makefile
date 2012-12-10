@@ -1,3 +1,3 @@
 # CXXFLAGS=-g -O2
-CXXFLAGS=-g
+CXXFLAGS=-g -pthread -O0 -lpthread
 scatter: scatter.cpp

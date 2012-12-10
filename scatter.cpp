@@ -9,6 +9,8 @@ using namespace std;
 
 // FINIS HEADER INCLUDES
 
+#define NO_INLINE __attribute__ ((noinline)) 
+
 // START CLASS AND DATA DEFINITIONS
 
 class ParseArgs {
@@ -207,7 +209,10 @@ public:
 private:
     void join() {
         void *retval;
-        pthread_join(this->thread, &retval);
+        int err = pthread_join(this->thread, &retval);
+        if (err != 0) {
+            println("join error on thread ", threadid(), " error code ", err);
+        }
     }
 };
 
@@ -231,7 +236,7 @@ public:
         return m_num_threads;
     }
 
-    void wait_and_exit() {
+    NO_INLINE void wait_and_exit() {
         for (int i=0; i < m_num_threads; i++) {
             if (contexts[i] != NULL)
                 contexts[i]->join();
