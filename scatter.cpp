@@ -2,6 +2,7 @@
 #include <sstream>
 #include <string>
 #include <math.h>
+#include <algorithm>
 
 #include <pthread.h>
 
@@ -512,9 +513,9 @@ void DivDomainHistogramWorker::run()
 
     intptr_t l = sb->input_length();
     uint32_t const* const d = sb->input_data();
-    intptr_t m = sb->domain_length();
+    int64_t m = sb->domain_length();
     uintptr_t *o = sb->output_data();
-    for (intptr_t i = subdom_start; i < subdom_finis; i++) {
+    for (intptr_t i = subdom_start; i < min(m, subdom_finis); i++) {
         o[i] = 0;
     }
     for (intptr_t i = 0; i < l; i++) {
