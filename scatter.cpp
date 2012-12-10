@@ -3,6 +3,7 @@
 #include <string>
 #include <math.h>
 #include <algorithm>
+#include <sys/time.h>
 
 #include <pthread.h>
 
@@ -137,9 +138,13 @@ private:
 class SnapshotResourceUsage
 {
     struct rusage r_usage;
+    struct timeval real_time;
 public:
     SnapshotResourceUsage() { }
-    void take_snapshot() { getrusage(RUSAGE_SELF, &r_usage); }
+    void take_snapshot() {
+        getrusage(RUSAGE_SELF, &r_usage);
+        gettimeofday(&real_time, NULL);
+    }
 private:
     void timeDuration(time_t start_s, suseconds_t start_us,
                       time_t finis_s, suseconds_t finis_us,
@@ -172,6 +177,14 @@ public:
                             suseconds_t *dmicroseconds_recv) const {
         timeDuration(r_usage.ru_stime.tv_sec, r_usage.ru_stime.tv_usec,
                      end.r_usage.ru_stime.tv_sec, end.r_usage.ru_stime.tv_usec,
+                     dseconds_recv, dmicroseconds_recv);
+    }
+
+    void wallclockTimeDuration(SnapshotResourceUsage const &end,
+                               time_t *dseconds_recv,
+                               suseconds_t *dmicroseconds_recv) const {
+        timeDuration(real_time.tv_sec, real_time.tv_usec,
+                     end.real_time.tv_sec, end.real_time.tv_usec,
                      dseconds_recv, dmicroseconds_recv);
     }
 };
@@ -284,7 +297,14 @@ protected:
     void takeSnapshotStart() { start_resource_usage.take_snapshot(); }
     void takeSnapshotFinis() { finis_resource_usage.take_snapshot(); }
     void userTimeDuration(time_t *dseconds, suseconds_t *duseconds) {
-        start_resource_usage.userTimeDuration(finis_resource_usage, dseconds, duseconds);
+        start_resource_usage.userTimeDuration(finis_resource_usage,
+                                              dseconds,
+                                              duseconds);
+    }
+    void wallclockTimeDuration(time_t *dseconds, suseconds_t *duseconds) {
+        start_resource_usage.wallclockTimeDuration(finis_resource_usage,
+                                                   dseconds,
+                                                   duseconds);
     }
 private:
     const int m_num_threads;
