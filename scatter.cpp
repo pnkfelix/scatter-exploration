@@ -230,6 +230,7 @@ private:
 
 public:
     WorkerContext(int a) : threadid_( a) { }
+    virtual ~WorkerContext() { }
 public:
     virtual void run() { }
     void spawn() {
@@ -629,6 +630,51 @@ public:
         }
 };
 
+class DivInputHistogramBuilderDupeing : public CommonHistogramBuilder {
+    typedef DivInputHistogramBuilderDupeing BLDR;
+    class Worker : public WorkerContext {
+        void run();
+        friend class DivInputHistogramBuilderDupeing;
+        Worker(BLDR *builder_, int i)
+            : WorkerContext(i), commonBuilder(builder_) {
+            myOutput = new uint64_t[commonBuilder->domain_length()];
+        }
+        ~Worker() { delete[] myOutput; }
+        void increment(uint32_t index) {
+            myOutput[index] += 1;
+        }
+    protected:
+        BLDR *commonBuilder;
+        uint64_t *myOutput;
+    };
+    WorkerContext *newWorker(int i) {
+        Worker *w = new Worker(this, i);
+        workers[i] = w;
+        return w;
+    }
+public:
+    DivInputHistogramBuilderDupeing(ParseArgs const& args, InputOutputBuilder *hb)
+        : CommonHistogramBuilder(args, hb) {
+        workers = new Worker*[args.num_threads];
+    }
+    ~DivInputHistogramBuilderDupeing() {
+        delete[] workers;
+    }
+    void onFinish()
+        {
+            int64_t dom = domain_length();
+            uint64_t *o = output_data();
+            for (int i=0; i < num_threads(); i++) {
+                for (int j = 0; j < dom; j++) {
+                    o[j] += workers[i]->myOutput[j];
+                }
+            }
+            this->CommonHistogramBuilder::onFinish();
+        }
+private:
+    Worker **workers;
+};
+
 // FINIS CLASS AND DATA DEFINITIONS
 
 Computation *makeBuilder(ParseArgs const& args, InputOutputBuilder *hist)
@@ -656,6 +702,11 @@ Computation *makeBuilder(ParseArgs const& args, InputOutputBuilder *hist)
             new ChainedComputation(new DivRangeHistogramClearer(args, hist),
                                    new DivInputHistogramBuilderAADDing(args, hist));
         break;
+    case 8:
+        builder =
+            new ChainedComputation(new DivRangeHistogramClearer(args, hist),
+                                   new DivInputHistogramBuilderDupeing(args, hist));
+        break;
     default: out << "unmatched program number: " << args.program << endl;
         WorkerContext::die(3);
     }
@@ -671,9 +722,10 @@ char const* describeProgramCode(int program)
     case 2: ret = "IterFib"; break;
     case 3: ret = "Sequential Histogram"; break;
     case 4: ret = "Par Histogram Div-Domain"; break;
-    case 5: ret = "Par Histogram Div-Input via Locking"; break;
-    case 6: ret = "Par Histogram Div-Input via CMPXCHG"; break;
-    case 7: ret = "Par Histogram Div-Input via Atomic Add"; break;
+    case 5: ret = "Par Histogram Div-Input One-Domain via Locking"; break;
+    case 6: ret = "Par Histogram Div-Input One-Domain via CMPXCHG"; break;
+    case 7: ret = "Par Histogram Div-Input One-Domain via Atomic Add"; break;
+    case 8: ret = "Par Histogram Div-Input Dup-Domain"; break;
     default:
         WorkerContext::die(4);
     }
@@ -868,6 +920,30 @@ void DivInputHistogramBuilderAADDing::Worker::run()
         uint32_t x = d[i];
         if (x >= m) { println("whoops", x); exit(99); }
         sb->increment(x);
+    }
+}
+
+void DivInputHistogramBuilderDupeing::Worker::run()
+{
+    BLDR * sb = commonBuilder;
+    int nt = sb->num_threads();
+    int64_t len = sb->input_length();
+    int64_t subinp_size = (len + (nt - 1)) / nt;
+    int id = threadid();
+    int64_t subinp_start = id * subinp_size;
+    int64_t subinp_finis = min(len, subinp_start + subinp_size);
+
+    if (sb->args().verbosity > 2)
+        println("worker ", id, " does input [",
+                subinp_start, " -- ", subinp_finis, ").");
+
+    intptr_t l = sb->input_length();
+    uint32_t const* const d = sb->input_data();
+    int64_t m = sb->domain_length();
+    for (intptr_t i = subinp_start; i < subinp_finis; i++) {
+        uint32_t x = d[i];
+        if (x >= m) { println("whoops", x); exit(99); }
+        increment(x); // note that this is on *my* array, not sb's
     }
 }
 
