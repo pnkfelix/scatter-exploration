@@ -234,7 +234,7 @@ public:
         int rc = pthread_create(&thread, NULL, run_worker, (void*)this);
         if (rc) {
             cout << "Error: unable to create thread," << rc << endl;
-            exit(3);
+            WorkerContext::die(3);
         }
     }
 private:
@@ -256,16 +256,22 @@ private:
 class Computation
 {
 private:
-    virtual void DoComputation() = 0;
+    virtual void BeforeAllCompute() = 0;
+    virtual void DoMyComputation() = 0;
+    virtual void AfterAllCompute() = 0;
 public:
-    void go() { DoComputation(); }
+    void before() { BeforeAllCompute(); }
+    void go() { DoMyComputation(); }
+    void after() { AfterAllCompute(); }
     virtual ~Computation() {}
 };
 
 class ChainedComputation : public Computation
 {
 private:
-    void DoComputation() { c1->go(); c2->go(); }
+    void BeforeAllCompute() { c1->before(); c2->before(); }
+    void DoMyComputation() { c1->go(); c2->go(); }
+    void AfterAllCompute() { c1->after(); c2->after(); }
 public:
     ChainedComputation(Computation *c1, Computation *c2) : c1(c1), c2(c2) {}
     ~ChainedComputation() { delete c1; delete c2; }
@@ -277,7 +283,9 @@ private:
 class WorkerBuilder : public Computation, protected LockingPrintingHelper, public ResourceMeasure
 {
 private:
-    void DoComputation() { this->StartComputation(); this->WaitForFinish(); }
+    void BeforeAllCompute() {}
+    void DoMyComputation() { this->StartComputation(); this->WaitForFinish(); }
+    void AfterAllCompute() { onFinish(); }
 
     virtual WorkerContext *newWorker(int i) = 0;
 
@@ -304,8 +312,6 @@ private:
             }
         }
         take_snapshot_finis();
-        onFinish();
-        // WorkerContext::wait_and_exit();
     }
 public:
     WorkerBuilder(ParseArgs const& args)
@@ -353,6 +359,9 @@ public:
         }
         delete[] contexts;
     }
+protected:
+    void println_seconds(const char* prefix,
+                         time_t dseconds, suseconds_t dmicroseconds);
 private:
     int const m_num_threads;
     ParseArgs const& m_args;
@@ -476,8 +485,6 @@ protected:
         : WorkerBuilder(args), hb(hb) { }
     void onStart();
     void onFinish();
-    void println_seconds(const char* prefix,
-                         time_t dseconds, suseconds_t dmicroseconds);
     intptr_t resultSummary();
 public:
     int64_t input_length() const { return hb->input_length(); }
@@ -521,21 +528,34 @@ public:
         : CommonHistogramBuilder(args, hb) {}
 };
 
-class DivRangeHistogramClearer : public CommonHistogramBuilder
+class DivRangeHistogramClearer : public WorkerBuilder
 {
     WorkerContext *newWorker(int i) { return new Worker(this, i); }
     class Worker : public WorkerContext
     {
         friend class DivRangeHistogramClearer;
         void run();
-        Worker(CommonHistogramBuilder *builder_, int i)
+        Worker(DivRangeHistogramClearer *builder_, int i)
             : WorkerContext(i), commonBuilder(builder_) { }
     protected:
-        CommonHistogramBuilder *commonBuilder;
+        DivRangeHistogramClearer *commonBuilder;
     };
+
+public:
+    int64_t input_length() const { return hb->input_length(); }
+    uint32_t const* input_data() const { return hb->input_data(); }
+    intptr_t domain_length() const { return hb->domain_length(); }
+    uintptr_t* output_data() const { return hb->output_data(); }
+    ParseArgs const& args() const { return hb->args; }
+private:
+    void onFinish();
+    void onStart() { }
+    intptr_t resultSummary() { return 0; }
+
 public:
     DivRangeHistogramClearer(ParseArgs const& args, InputOutputBuilder *hb)
-        : CommonHistogramBuilder(args, hb) {}
+        : WorkerBuilder(args), hb(hb) {}
+    InputOutputBuilder *hb;
 };
 
 class DivInputHistogramBuilder;
@@ -601,7 +621,9 @@ int main(int argc, const char **argv)
         WorkerContext::die(3);
     }
 
+    builder->before();
     builder->go();
+    builder->after();
 
     delete builder;
 }
@@ -620,7 +642,7 @@ void SeqHistogramWorker::run()
         }
         for (intptr_t i = 0; i < l; i++) {
             uint32_t x = d[i];
-            if (x >= m) { println("whoops", x); exit(99); }
+            if (x >= m) { println("whoops", x); WorkerContext::die(99); }
             o[x] += 1;
         }
     } else {
@@ -657,9 +679,25 @@ void DivDomainHistogramWorker::run()
     }
 }
 
+void DivRangeHistogramClearer::onFinish()
+{
+    time_t user_dseconds;
+    suseconds_t user_dmicroseconds;
+
+    time_t wall_dseconds;
+    suseconds_t wall_dmicroseconds;
+
+    userTimeDuration(&user_dseconds, &user_dmicroseconds);
+    wallclockTimeDuration(&wall_dseconds, &wall_dmicroseconds);
+
+    println_seconds("clearing user time", user_dseconds, user_dmicroseconds);
+
+    println_seconds("clearing wallclock", wall_dseconds, wall_dmicroseconds);
+}
+
 void DivRangeHistogramClearer::Worker::run()
 {
-    CommonHistogramBuilder const* sb = commonBuilder;
+    DivRangeHistogramClearer const* sb = commonBuilder;
     int nt = sb->num_threads();
     int64_t dom = sb->domain_length();
     int64_t subdom_size = (dom + (nt - 1)) / nt;
@@ -742,9 +780,9 @@ void CommonHistogramBuilder::onStart()
     WorkerBuilder::println("Histogram start");
 }
 
-void CommonHistogramBuilder::println_seconds(const char* prefix,
-                                             time_t dseconds,
-                                             suseconds_t dmicroseconds)
+void WorkerBuilder::println_seconds(const char* prefix,
+                                    time_t dseconds,
+                                    suseconds_t dmicroseconds)
 {
     // println(prefix, "seconds: ", dseconds, " microseconds: ", dmicroseconds);
     println(prefix, " seconds: ", dseconds, ".", setw(6), setfill('0'), dmicroseconds);
@@ -769,11 +807,11 @@ void CommonHistogramBuilder::onFinish()
     ss << std::hex << resultSummary();
     println("summary: 0x", ss.str());
 
-    println_seconds("inp build", hb->build_dseconds, hb->build_dmicroseconds);
+    println_seconds("initializing input", hb->build_dseconds, hb->build_dmicroseconds);
 
-    println_seconds("user time", user_dseconds, user_dmicroseconds);
+    println_seconds("building user time", user_dseconds, user_dmicroseconds);
 
-    println_seconds("wallclock", wall_dseconds, wall_dmicroseconds);
+    println_seconds("building wallclock", wall_dseconds, wall_dmicroseconds);
 }
 intptr_t CommonHistogramBuilder::resultSummary() {
     CommonHistogramBuilder *sb = this;
@@ -833,13 +871,11 @@ void IterFibWorker::run()
             w->inter_println("  ");
         w->finis_println("ID(", tid, "): ", r, " ", "iteration ", i);
     }
-    pthread_exit(NULL);
 }
 
 void HelloWorker::run()
 {
     println("Hello World ", threadid());
-    pthread_exit(NULL);
 }
 
 void ParseArgs::print_values()
