@@ -371,13 +371,12 @@ private:
 
 pthread_mutex_t LockingPrintingHelper::cout_mutex;
 
-class HelloWorker;
-class HelloWorker : public WorkerContext {
-    void run();
-public: HelloWorker(int i) : WorkerContext(i) { }
-};
 class HelloBuilder : public WorkerBuilder {
-    WorkerContext *newWorker(int i) { return new HelloWorker(i); }
+    class Worker : public WorkerContext {
+        void run();
+    public: Worker(int i) : WorkerContext(i) { }
+    };
+    WorkerContext *newWorker(int i) { return new Worker(i); }
 public:
     HelloBuilder(ParseArgs const& args) : WorkerBuilder(args) { }
     void onFinish() { println("Hello World done"); }
@@ -385,13 +384,12 @@ public:
     intptr_t resultSummary() { return 0; }
 };
 
-class IterFibWorker;
-class IterFibWorker : public WorkerContext {
-    void run();
-public: IterFibWorker(int i) : WorkerContext(i) { }
-};
 class IterFibBuilder : public WorkerBuilder {
-    WorkerContext *newWorker(int i) { return new IterFibWorker(i); }
+    class Worker : public WorkerContext {
+        void run();
+    public: Worker(int i) : WorkerContext(i) { }
+    };
+    WorkerContext *newWorker(int i) { return new Worker(i); }
 public:
     IterFibBuilder(ParseArgs const& args) : WorkerBuilder(args) { }
     void onFinish() { println("Iterated Fibonacci done"); }
@@ -496,33 +494,31 @@ private:
     InputOutputBuilder *hb;
 };
 
-class SeqHistogramBuilder;
-class SeqHistogramWorker : public WorkerContext {
-    void run();
-    friend class SeqHistogramBuilder;
-    SeqHistogramWorker(CommonHistogramBuilder *builder_, int i)
-        : WorkerContext(i), commonBuilder(builder_) { }
-protected:
-    CommonHistogramBuilder *commonBuilder;
-};
 class SeqHistogramBuilder : public CommonHistogramBuilder {
-    WorkerContext *newWorker(int i) { return new SeqHistogramWorker(this, i); }
+    class Worker : public WorkerContext {
+        void run();
+        friend class SeqHistogramBuilder;
+        Worker(CommonHistogramBuilder *builder_, int i)
+            : WorkerContext(i), commonBuilder(builder_) { }
+    protected:
+        CommonHistogramBuilder *commonBuilder;
+    };
+    WorkerContext *newWorker(int i) { return new Worker(this, i); }
 public:
     SeqHistogramBuilder(ParseArgs const& args, InputOutputBuilder *hb)
         : CommonHistogramBuilder(args, hb) {}
 };
 
-class DivDomainHistogramBuilder;
-class DivDomainHistogramWorker : public WorkerContext {
-    void run();
-    friend class DivDomainHistogramBuilder;
-    DivDomainHistogramWorker(CommonHistogramBuilder *builder_, int i)
-        : WorkerContext(i), commonBuilder(builder_) { }
-protected:
-    CommonHistogramBuilder *commonBuilder;
-};
 class DivDomainHistogramBuilder : public CommonHistogramBuilder {
-    WorkerContext *newWorker(int i) { return new DivDomainHistogramWorker(this, i); }
+    class Worker : public WorkerContext {
+        void run();
+        friend class DivDomainHistogramBuilder;
+        Worker(CommonHistogramBuilder *builder_, int i)
+            : WorkerContext(i), commonBuilder(builder_) { }
+    protected:
+        CommonHistogramBuilder *commonBuilder;
+    };
+    WorkerContext *newWorker(int i) { return new Worker(this, i); }
 public:
     DivDomainHistogramBuilder(ParseArgs const& args, InputOutputBuilder *hb)
         : CommonHistogramBuilder(args, hb) {}
@@ -558,17 +554,16 @@ public:
     InputOutputBuilder *hb;
 };
 
-class DivInputHistogramBuilder;
-class DivInputHistogramWorker : public WorkerContext {
-    void run();
-    friend class DivInputHistogramBuilder;
-    DivInputHistogramWorker(DivInputHistogramBuilder *builder_, int i)
-        : WorkerContext(i), commonBuilder(builder_) { }
-protected:
-    DivInputHistogramBuilder *commonBuilder;
-};
 class DivInputHistogramBuilder : public CommonHistogramBuilder {
-    WorkerContext *newWorker(int i) { return new DivInputHistogramWorker(this, i); }
+    class Worker : public WorkerContext {
+        void run();
+        friend class DivInputHistogramBuilder;
+        Worker(DivInputHistogramBuilder *builder_, int i)
+            : WorkerContext(i), commonBuilder(builder_) { }
+    protected:
+        DivInputHistogramBuilder *commonBuilder;
+    };
+    WorkerContext *newWorker(int i) { return new Worker(this, i); }
 public:
     DivInputHistogramBuilder(ParseArgs const& args, InputOutputBuilder *hb)
         : CommonHistogramBuilder(args, hb)
@@ -628,7 +623,7 @@ int main(int argc, const char **argv)
     delete builder;
 }
 
-void SeqHistogramWorker::run()
+void SeqHistogramBuilder::Worker::run()
 {
     CommonHistogramBuilder *sb = commonBuilder;
     if (threadid() == 0) {
@@ -650,7 +645,7 @@ void SeqHistogramWorker::run()
     }
 }
 
-void DivDomainHistogramWorker::run()
+void DivDomainHistogramBuilder::Worker::run()
 {
     CommonHistogramBuilder const* sb = commonBuilder;
     int nt = sb->num_threads();
@@ -719,7 +714,7 @@ void DivRangeHistogramClearer::Worker::run()
     }
 }
 
-void DivInputHistogramWorker::run()
+void DivInputHistogramBuilder::Worker::run()
 {
     DivInputHistogramBuilder * sb = commonBuilder;
     int nt = sb->num_threads();
@@ -837,9 +832,9 @@ long long fib(int x)
     return a;
 }
 
-void IterFibWorker::run()
+void IterFibBuilder::Worker::run()
 {
-    IterFibWorker *w = this;
+    Worker *w = this;
     int tid = w->threadid();
     w->println("Hello World!  Thread ID: ", tid);
 
@@ -873,7 +868,7 @@ void IterFibWorker::run()
     }
 }
 
-void HelloWorker::run()
+void HelloBuilder::Worker::run()
 {
     println("Hello World ", threadid());
 }
