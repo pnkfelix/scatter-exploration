@@ -8,6 +8,8 @@
 
 #include <pthread.h>
 
+#include <libkern/OSAtomic.h>
+
 using namespace std;
 
 // FINIS HEADER INCLUDES
@@ -495,13 +497,14 @@ private:
 };
 
 class SeqHistogramBuilder : public CommonHistogramBuilder {
+    typedef SeqHistogramBuilder BLDR;
     class Worker : public WorkerContext {
         void run();
         friend class SeqHistogramBuilder;
-        Worker(CommonHistogramBuilder *builder_, int i)
+        Worker(BLDR *builder_, int i)
             : WorkerContext(i), commonBuilder(builder_) { }
     protected:
-        CommonHistogramBuilder *commonBuilder;
+        BLDR *commonBuilder;
     };
     WorkerContext *newWorker(int i) { return new Worker(this, i); }
 public:
@@ -510,13 +513,14 @@ public:
 };
 
 class DivDomainHistogramBuilder : public CommonHistogramBuilder {
+    typedef DivDomainHistogramBuilder BLDR;
     class Worker : public WorkerContext {
         void run();
         friend class DivDomainHistogramBuilder;
-        Worker(CommonHistogramBuilder *builder_, int i)
+        Worker(BLDR *builder_, int i)
             : WorkerContext(i), commonBuilder(builder_) { }
     protected:
-        CommonHistogramBuilder *commonBuilder;
+        BLDR *commonBuilder;
     };
     WorkerContext *newWorker(int i) { return new Worker(this, i); }
 public:
@@ -554,18 +558,19 @@ public:
     InputOutputBuilder *hb;
 };
 
-class DivInputHistogramBuilder : public CommonHistogramBuilder {
+class DivInputHistogramBuilderLocking : public CommonHistogramBuilder {
+    typedef DivInputHistogramBuilderLocking BLDR;
     class Worker : public WorkerContext {
         void run();
-        friend class DivInputHistogramBuilder;
-        Worker(DivInputHistogramBuilder *builder_, int i)
+        friend class DivInputHistogramBuilderLocking;
+        Worker(BLDR *builder_, int i)
             : WorkerContext(i), commonBuilder(builder_) { }
     protected:
-        DivInputHistogramBuilder *commonBuilder;
+        BLDR *commonBuilder;
     };
     WorkerContext *newWorker(int i) { return new Worker(this, i); }
 public:
-    DivInputHistogramBuilder(ParseArgs const& args, InputOutputBuilder *hb)
+    DivInputHistogramBuilderLocking(ParseArgs const& args, InputOutputBuilder *hb)
         : CommonHistogramBuilder(args, hb)
         { pthread_mutex_init(&output_mutex, NULL); }
     void increment(uint32_t index)
@@ -576,6 +581,32 @@ public:
         }
 private:
     pthread_mutex_t output_mutex;
+};
+
+class DivInputHistogramBuilderCSWPing : public CommonHistogramBuilder {
+    typedef DivInputHistogramBuilderCSWPing BLDR;
+    class Worker : public WorkerContext {
+        void run();
+        friend class DivInputHistogramBuilderCSWPing;
+        Worker(BLDR *builder_, int i)
+            : WorkerContext(i), commonBuilder(builder_) { }
+    protected:
+        BLDR *commonBuilder;
+    };
+    WorkerContext *newWorker(int i) { return new Worker(this, i); }
+public:
+    DivInputHistogramBuilderCSWPing(ParseArgs const& args, InputOutputBuilder *hb)
+        : CommonHistogramBuilder(args, hb) {}
+    void increment(uint32_t index)
+        {
+            bool r;
+            do {
+                uintptr_t x = this->output_data()[index];
+                uintptr_t xnew = x+1;
+                r = OSAtomicCompareAndSwapPtr((void*)x, (void*)xnew,
+                                              (void**)&this->output_data()[index]);
+            } while (!r);
+        }
 };
 
 // FINIS CLASS AND DATA DEFINITIONS
@@ -610,7 +641,12 @@ int main(int argc, const char **argv)
     case 5:
         builder =
             new ChainedComputation(new DivRangeHistogramClearer(args, &hist),
-                                   new DivInputHistogramBuilder(args, &hist));
+                                   new DivInputHistogramBuilderLocking(args, &hist));
+        break;
+    case 6:
+        builder =
+            new ChainedComputation(new DivRangeHistogramClearer(args, &hist),
+                                   new DivInputHistogramBuilderCSWPing(args, &hist));
         break;
     default: out << "unmatched program number: " << args.program << endl;
         WorkerContext::die(3);
@@ -714,9 +750,33 @@ void DivRangeHistogramClearer::Worker::run()
     }
 }
 
-void DivInputHistogramBuilder::Worker::run()
+void DivInputHistogramBuilderLocking::Worker::run()
 {
-    DivInputHistogramBuilder * sb = commonBuilder;
+    DivInputHistogramBuilderLocking * sb = commonBuilder;
+    int nt = sb->num_threads();
+    int64_t len = sb->input_length();
+    int64_t subinp_size = (len + (nt - 1)) / nt;
+    int id = threadid();
+    int64_t subinp_start = id * subinp_size;
+    int64_t subinp_finis = min(len, subinp_start + subinp_size);
+
+    if (sb->args().verbosity > 1)
+        println("worker ", id, " does input [",
+                subinp_start, " -- ", subinp_finis, ").");
+
+    intptr_t l = sb->input_length();
+    uint32_t const* const d = sb->input_data();
+    int64_t m = sb->domain_length();
+    for (intptr_t i = subinp_start; i < subinp_finis; i++) {
+        uint32_t x = d[i];
+        if (x >= m) { println("whoops", x); exit(99); }
+        sb->increment(x);
+    }
+}
+
+void DivInputHistogramBuilderCSWPing::Worker::run()
+{
+    DivInputHistogramBuilderCSWPing * sb = commonBuilder;
     int nt = sb->num_threads();
     int64_t len = sb->input_length();
     int64_t subinp_size = (len + (nt - 1)) / nt;
