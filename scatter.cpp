@@ -299,7 +299,7 @@ private:
     virtual void onStart() = 0;
 
     // checksum to describe result output of computation.
-    virtual intptr_t resultSummary() = 0;
+    virtual uint64_t resultSummary() = 0;
 
 public:
     int num_threads() const {
@@ -345,7 +345,7 @@ private:
     }
     void spawnWorkers() {
         for (int i=0; i < m_num_threads; i++) {
-            if (m_args.verbosity > 1) contexts[i]->println("main() : creating thread, ", i);
+            if (m_args.verbosity > 2) contexts[i]->println("main() : creating thread, ", i);
             contexts[i]->spawn();
         }
     }
@@ -383,7 +383,7 @@ public:
     HelloBuilder(ParseArgs const& args) : WorkerBuilder(args) { }
     void onFinish() { println("Hello World done"); }
     void onStart() { println("Hello World start"); }
-    intptr_t resultSummary() { return 0; }
+    uint64_t resultSummary() { return 0; }
 };
 
 class IterFibBuilder : public WorkerBuilder {
@@ -396,7 +396,7 @@ public:
     IterFibBuilder(ParseArgs const& args) : WorkerBuilder(args) { }
     void onFinish() { println("Iterated Fibonacci done"); }
     void onStart() { println("Iterated Fibonacci start"); }
-    intptr_t resultSummary() { return 0; }
+    uint64_t resultSummary() { return 0; }
 };
 
 class MarsagliaRNG
@@ -439,13 +439,13 @@ public:
     int64_t input_length() const { return input_len; }
     uint32_t const* input_data() const { return input; }
     intptr_t domain_length() const { return domain_len; }
-    uintptr_t* output_data() const { return output; }
+    uint64_t* output_data() const { return output; }
     InputOutputBuilder(ParseArgs const& args)
         : input_len(args.input_length)
         , domain_len(args.domain_size)
         , args(args) {
         input = new uint32_t[input_len];
-        output = new uintptr_t[domain_len];
+        output = new uint64_t[domain_len];
     }
     void build_input() {
         ResourceMeasure rm;
@@ -469,7 +469,7 @@ private:
     intptr_t input_len;
     uint32_t* input;
     intptr_t domain_len;
-    uintptr_t *output;
+    uint64_t *output;
     LockingPrintingHelper p;
 public:
     time_t build_dseconds;
@@ -485,12 +485,12 @@ protected:
         : WorkerBuilder(args), hb(hb) { }
     void onStart();
     void onFinish();
-    intptr_t resultSummary();
+    uint64_t resultSummary();
 public:
     int64_t input_length() const { return hb->input_length(); }
     uint32_t const* input_data() const { return hb->input_data(); }
     intptr_t domain_length() const { return hb->domain_length(); }
-    uintptr_t* output_data() const { return hb->output_data(); }
+    uint64_t* output_data() const { return hb->output_data(); }
     ParseArgs const& args() const { return hb->args; }
 private:
     InputOutputBuilder *hb;
@@ -545,12 +545,12 @@ public:
     int64_t input_length() const { return hb->input_length(); }
     uint32_t const* input_data() const { return hb->input_data(); }
     intptr_t domain_length() const { return hb->domain_length(); }
-    uintptr_t* output_data() const { return hb->output_data(); }
+    uint64_t* output_data() const { return hb->output_data(); }
     ParseArgs const& args() const { return hb->args; }
 private:
     void onFinish();
     void onStart() { }
-    intptr_t resultSummary() { return 0; }
+    uint64_t resultSummary() { return 0; }
 
 public:
     DivRangeHistogramClearer(ParseArgs const& args, InputOutputBuilder *hb)
@@ -601,20 +601,88 @@ public:
         {
             bool r;
             do {
-                uintptr_t x = this->output_data()[index];
-                uintptr_t xnew = x+1;
+                uint64_t x = this->output_data()[index];
+                uint64_t xnew = x+1;
                 r = OSAtomicCompareAndSwapPtr((void*)x, (void*)xnew,
                                               (void**)&this->output_data()[index]);
             } while (!r);
         }
 };
 
+class DivInputHistogramBuilderAADDing : public CommonHistogramBuilder {
+    typedef DivInputHistogramBuilderAADDing BLDR;
+    class Worker : public WorkerContext {
+        void run();
+        friend class DivInputHistogramBuilderAADDing;
+        Worker(BLDR *builder_, int i)
+            : WorkerContext(i), commonBuilder(builder_) { }
+    protected:
+        BLDR *commonBuilder;
+    };
+    WorkerContext *newWorker(int i) { return new Worker(this, i); }
+public:
+    DivInputHistogramBuilderAADDing(ParseArgs const& args, InputOutputBuilder *hb)
+        : CommonHistogramBuilder(args, hb) {}
+    void increment(uint32_t index)
+        {
+            OSAtomicIncrement64((int64_t*)&this->output_data()[index]);
+        }
+};
+
 // FINIS CLASS AND DATA DEFINITIONS
+
+Computation *makeBuilder(ParseArgs const& args, InputOutputBuilder *hist)
+{
+    stringstream out;
+    Computation *builder;
+    int nt = args.num_threads;
+    switch (args.program) {
+    case 1: builder = new HelloBuilder(args); break;
+    case 2: builder = new IterFibBuilder(args); break;
+    case 3: builder = new SeqHistogramBuilder(args, hist); break;
+    case 4: builder = new DivDomainHistogramBuilder(args, hist); break;
+    case 5:
+        builder =
+            new ChainedComputation(new DivRangeHistogramClearer(args, hist),
+                                   new DivInputHistogramBuilderLocking(args, hist));
+        break;
+    case 6:
+        builder =
+            new ChainedComputation(new DivRangeHistogramClearer(args, hist),
+                                   new DivInputHistogramBuilderCSWPing(args, hist));
+        break;
+    case 7:
+        builder =
+            new ChainedComputation(new DivRangeHistogramClearer(args, hist),
+                                   new DivInputHistogramBuilderAADDing(args, hist));
+        break;
+    default: out << "unmatched program number: " << args.program << endl;
+        WorkerContext::die(3);
+    }
+
+    return builder;
+}
+
+char const* describeProgramCode(int program)
+{
+    char const *ret;
+    switch (program) {
+    case 1: ret = "Hello"; break;
+    case 2: ret = "IterFib"; break;
+    case 3: ret = "Sequential Histogram"; break;
+    case 4: ret = "Par Histogram Div-Domain"; break;
+    case 5: ret = "Par Histogram Div-Input via Locking"; break;
+    case 6: ret = "Par Histogram Div-Input via CMPXCHG"; break;
+    case 7: ret = "Par Histogram Div-Input via Atomic Add"; break;
+    default:
+        WorkerContext::die(4);
+    }
+    return ret;
+}
 
 int main(int argc, const char **argv)
 {
     string s;
-    stringstream out;
 
     ParseArgs args;
 
@@ -631,26 +699,7 @@ int main(int argc, const char **argv)
     hist.build_input();
 
     // set up workers
-    Computation *builder;
-    int nt = args.num_threads;
-    switch (args.program) {
-    case 1: builder = new HelloBuilder(args); break;
-    case 2: builder = new IterFibBuilder(args); break;
-    case 3: builder = new SeqHistogramBuilder(args, &hist); break;
-    case 4: builder = new DivDomainHistogramBuilder(args, &hist); break;
-    case 5:
-        builder =
-            new ChainedComputation(new DivRangeHistogramClearer(args, &hist),
-                                   new DivInputHistogramBuilderLocking(args, &hist));
-        break;
-    case 6:
-        builder =
-            new ChainedComputation(new DivRangeHistogramClearer(args, &hist),
-                                   new DivInputHistogramBuilderCSWPing(args, &hist));
-        break;
-    default: out << "unmatched program number: " << args.program << endl;
-        WorkerContext::die(3);
-    }
+    Computation *builder = makeBuilder(args, &hist);
 
     builder->before();
     builder->go();
@@ -666,7 +715,7 @@ void SeqHistogramBuilder::Worker::run()
         intptr_t l = sb->input_length();
         uint32_t const* const d = sb->input_data();
         intptr_t m = sb->domain_length();
-        uintptr_t *o = sb->output_data();
+        uint64_t *o = sb->output_data();
 
         for (intptr_t i = 0; i < m; i++) {
             o[i] = 0;
@@ -691,14 +740,14 @@ void DivDomainHistogramBuilder::Worker::run()
     int64_t subdom_start = id * subdom_size;
     int64_t subdom_finis = subdom_start + subdom_size;
 
-    if (sb->args().verbosity > 1)
+    if (sb->args().verbosity > 2)
         println("worker ", id, " does domain [",
                 subdom_start, " -- ", subdom_finis, ").");
 
     intptr_t l = sb->input_length();
     uint32_t const* const d = sb->input_data();
     int64_t m = sb->domain_length();
-    uintptr_t *o = sb->output_data();
+    uint64_t *o = sb->output_data();
     for (intptr_t i = subdom_start; i < min(m, subdom_finis); i++) {
         o[i] = 0;
     }
@@ -736,14 +785,14 @@ void DivRangeHistogramClearer::Worker::run()
     int64_t subdom_start = id * subdom_size;
     int64_t subdom_finis = subdom_start + subdom_size;
 
-    if (sb->args().verbosity > 1)
+    if (sb->args().verbosity > 2)
         println("worker ", id, " does domain [",
                 subdom_start, " -- ", subdom_finis, ").");
 
     intptr_t l = sb->input_length();
     uint32_t const* const d = sb->input_data();
     int64_t m = sb->domain_length();
-    uintptr_t *o = sb->output_data();
+    uint64_t *o = sb->output_data();
     for (intptr_t i = subdom_start; i < min(m, subdom_finis); i++) {
         // println("clearing ", i, " ", &o[i]);
         o[i] = 0;
@@ -760,7 +809,7 @@ void DivInputHistogramBuilderLocking::Worker::run()
     int64_t subinp_start = id * subinp_size;
     int64_t subinp_finis = min(len, subinp_start + subinp_size);
 
-    if (sb->args().verbosity > 1)
+    if (sb->args().verbosity > 2)
         println("worker ", id, " does input [",
                 subinp_start, " -- ", subinp_finis, ").");
 
@@ -784,7 +833,31 @@ void DivInputHistogramBuilderCSWPing::Worker::run()
     int64_t subinp_start = id * subinp_size;
     int64_t subinp_finis = min(len, subinp_start + subinp_size);
 
-    if (sb->args().verbosity > 1)
+    if (sb->args().verbosity > 2)
+        println("worker ", id, " does input [",
+                subinp_start, " -- ", subinp_finis, ").");
+
+    intptr_t l = sb->input_length();
+    uint32_t const* const d = sb->input_data();
+    int64_t m = sb->domain_length();
+    for (intptr_t i = subinp_start; i < subinp_finis; i++) {
+        uint32_t x = d[i];
+        if (x >= m) { println("whoops", x); exit(99); }
+        sb->increment(x);
+    }
+}
+
+void DivInputHistogramBuilderAADDing::Worker::run()
+{
+    BLDR * sb = commonBuilder;
+    int nt = sb->num_threads();
+    int64_t len = sb->input_length();
+    int64_t subinp_size = (len + (nt - 1)) / nt;
+    int id = threadid();
+    int64_t subinp_start = id * subinp_size;
+    int64_t subinp_finis = min(len, subinp_start + subinp_size);
+
+    if (sb->args().verbosity > 2)
         println("worker ", id, " does input [",
                 subinp_start, " -- ", subinp_finis, ").");
 
@@ -818,7 +891,7 @@ void InputOutputBuilder::printOutput()
 {
     InputOutputBuilder *sb = this;
     intptr_t l = sb->domain_length();
-    uintptr_t *d = sb->output_data();
+    uint64_t *d = sb->output_data();
     intptr_t tot = 0;
     for (int i=0; i < l; i++) {
         if (d[i] != 0) {
@@ -856,7 +929,7 @@ void CommonHistogramBuilder::onFinish()
     userTimeDuration(&user_dseconds, &user_dmicroseconds);
     wallclockTimeDuration(&wall_dseconds, &wall_dmicroseconds);
 
-    if (args().verbosity > 1) hb->print_output();
+    if (args().verbosity > 2) hb->print_output();
 
     stringstream ss;
     ss << std::hex << resultSummary();
@@ -868,10 +941,10 @@ void CommonHistogramBuilder::onFinish()
 
     println_seconds("building wallclock", wall_dseconds, wall_dmicroseconds);
 }
-intptr_t CommonHistogramBuilder::resultSummary() {
+uint64_t CommonHistogramBuilder::resultSummary() {
     CommonHistogramBuilder *sb = this;
     intptr_t l = sb->domain_length();
-    uintptr_t *d = sb->output_data();
+    uint64_t *d = sb->output_data();
     intptr_t accum = 0;
     for (intptr_t i=0; i < l; i++) {
         accum = (accum << 1) | ((accum >> sizeof(accum)) & 0x1);
@@ -936,13 +1009,13 @@ void HelloBuilder::Worker::run()
 void ParseArgs::print_values()
 {
     printf("num_threads:  %d\n", num_threads);
-    printf("rep:          %d\n", rep);
-    printf("program:      %d\n", program);
-    printf("seed_u:       %d\n", seed_u);
-    printf("seed_z:       %d\n", seed_z);
+    if (verbosity > 1) printf("rep:          %d\n", rep);
+    printf("program:      %d (%s)\n", program, describeProgramCode(program));
+    if (verbosity > 2) printf("seed_u:       %d\n", seed_u);
+    if (verbosity > 2) printf("seed_z:       %d\n", seed_z);
     printf("input_length: %lld\n", input_length);
     printf("domain_size:  %d\n", domain_size);
-    printf("verbosity:    %d\n", verbosity);
+    if (verbosity > 1) printf("verbosity:    %d\n", verbosity);
 }
 
 int ParseArgs::parse_all(int argc, const char **argv)
